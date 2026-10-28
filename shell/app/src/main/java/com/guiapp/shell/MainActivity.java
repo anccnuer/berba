@@ -23,6 +23,8 @@ import android.view.WindowManager;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.widget.FrameLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
 import android.widget.Toast;
 import android.window.OnBackInvokedCallback;
 import android.window.OnBackInvokedDispatcher;
@@ -31,6 +33,8 @@ import org.json.JSONObject;
 import org.luaj.vm2.LuaTable;
 import org.luaj.vm2.LuaValue;
 
+import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
@@ -89,12 +93,20 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        try {
+            setup();
+        } catch (Throwable t) {
+            Log.e(TAG, "应用启动失败", t);
+            showFatalError(t);
+        }
+    }
+
+    private void setup() {
         config = AppConfig.load(this);
         prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE);
 
-        setupWindow();
         FrameLayout root = new FrameLayout(this);
-        webView = new WebView(this);
+        webView = WebViewGuard.create(this);
         webView.setLayoutParams(new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
         configureWebView();
@@ -105,9 +117,53 @@ public class MainActivity extends Activity {
         root.addView(webView);
         applyInsets(root);
         setContentView(root);
+        // 必须在 decor 创建后调用：Android 16 的 PhoneWindow.getInsetsController()
+        // 在 mDecor 为 null 时会直接 NPE。
+        setupWindow();
         registerBackCallback();
 
         lua.start(this::onLuaReady);
+    }
+
+    /** 启动期异常没有 WebView/Lua 可用，用纯文本页展示堆栈，便于无 adb 时截图反馈。 */
+    private void showFatalError(Throwable error) {
+        try {
+            if (lua != null) {
+                lua.shutdown();
+                lua = null;
+            }
+            if (webView != null) {
+                webView.removeJavascriptInterface(JsBridge.NAME);
+                webView.destroy();
+                webView = null;
+            }
+        } catch (Throwable ignored) {
+        }
+        try {
+            StringWriter buffer = new StringWriter();
+            PrintWriter writer = new PrintWriter(buffer);
+            error.printStackTrace(writer);
+            writer.flush();
+
+            TextView text = new TextView(this);
+            text.setText("应用启动失败\n请截图本页反馈（错误详情如下）\n\n"
+                    + "设备: " + Build.MANUFACTURER + " " + Build.MODEL
+                    + " / Android " + Build.VERSION.RELEASE + " (API " + Build.VERSION.SDK_INT + ")\n\n"
+                    + buffer);
+            text.setTextColor(Color.BLACK);
+            text.setBackgroundColor(Color.WHITE);
+            text.setTextIsSelectable(true);
+            int pad = Math.round(16 * getResources().getDisplayMetrics().density);
+            text.setPadding(pad, pad, pad, pad);
+
+            ScrollView scroll = new ScrollView(this);
+            scroll.setBackgroundColor(Color.WHITE);
+            scroll.addView(text);
+            setContentView(scroll);
+        } catch (Throwable fatal) {
+            Log.e(TAG, "无法展示启动错误", fatal);
+            throw new RuntimeException(error);
+        }
     }
 
     private void registerBackCallback() {
@@ -122,18 +178,32 @@ public class MainActivity extends Activity {
             window.setDecorFitsSystemWindows(false);
             window.setStatusBarColor(Color.TRANSPARENT);
             window.setNavigationBarColor(Color.TRANSPARENT);
-            WindowInsetsController controller = window.getInsetsController();
-            if (controller != null) {
-                boolean dark = isDarkTheme();
-                int mask = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
-                        | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
-                controller.setSystemBarsAppearance(dark ? 0 : mask, mask);
-            }
+            applySystemBarAppearance(window);
+        }
+    }
+
+    private void applySystemBarAppearance(Window window) {
+        WindowInsetsController controller = insetsController(window);
+        if (controller == null) {
+            return;
+        }
+        boolean dark = isDarkTheme();
+        int mask = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+        controller.setSystemBarsAppearance(dark ? 0 : mask, mask);
+    }
+
+    private static WindowInsetsController insetsController(Window window) {
+        try {
+            return window.getInsetsController();
+        } catch (RuntimeException e) {
+            Log.w(TAG, "WindowInsetsController 不可用", e);
+            return null;
         }
     }
 
     private boolean isDarkTheme() {
-        String theme = config.theme;
+        String theme = config == null ? "light" : config.theme;
         if ("dark".equals(theme)) {
             return true;
         }
@@ -205,6 +275,13 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        if (fullscreen) {
+            // 附着后再应用一次，覆盖进入前后台或早期调用时 controller 尚不可用的情况。
+            applyFullscreen(true);
+        } else if (Build.VERSION.SDK_INT >= 30) {
+            // 窗口已附着，此时 controller 才可用（主题为 device 时也靠这里更新）。
+            applySystemBarAppearance(getWindow());
+        }
         if (webView != null) {
             webView.onResume();
         }
@@ -235,6 +312,8 @@ public class MainActivity extends Activity {
         super.onConfigurationChanged(newConfig);
         if (fullscreen) {
             mainHandler.post(() -> applyFullscreen(true));
+        } else if (Build.VERSION.SDK_INT >= 30) {
+            mainHandler.post(() -> applySystemBarAppearance(getWindow()));
         }
     }
 
@@ -412,7 +491,7 @@ public class MainActivity extends Activity {
     private void applyFullscreen(boolean on) {
         Window window = getWindow();
         if (Build.VERSION.SDK_INT >= 30) {
-            WindowInsetsController controller = window.getInsetsController();
+            WindowInsetsController controller = insetsController(window);
             if (controller == null) {
                 return;
             }
