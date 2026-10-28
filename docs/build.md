@@ -122,7 +122,18 @@ Linux/macOS：
 VERSION=0.1.0 ANDROID_SDK_ROOT=/path/to/sdk scripts/package-dist.sh
 ```
 
-shell 版本只打包当前平台（aapt2 必须与目标平台一致），产物命名 `berba-<版本>-<os>-<arch>.zip`。
+产物命名 `berba-<版本>-<os>-<arch>.zip`。发行包里唯一与操作系统绑定的二进制是 aapt2（Google 按平台分别分发），`classes.dex` 与 `android.jar` 平台无关，Go CLI 本身可交叉编译，因此**一台构建机可以组装所有平台的发行包**——`berba release` 支持：
+
+```bash
+berba release --home dist/windows-amd64 --out dist --version 0.13 \
+  --target-os windows --target-arch amd64 \
+  --aapt2-version "Android Asset Packaging Tool (aapt) 2.19-11948202"
+```
+
+- `--target-os`/`--target-arch`：决定目标平台 aapt2 的文件名（`aapt2` / `aapt2.exe`）与 zip 命名。
+- `--aapt2-version`：交叉打包时无法在本机执行目标平台的 aapt2，需显式注入版本字符串写入 `versions.json`（该字符串可在官方 build-tools 里用 `aapt2 version` 查到）。省略时对非本机平台直接报错，不会写错。
+
+交叉打包得到的 zip 只是"组装"，未经目标平台验证；真伪由 CI 的 windows-smoke 作业在真实 Windows runner 上解压发布产物、执行 `berba doctor`（会真正调用 aapt2.exe）并构建示例 APK 来确认。
 
 脚本执行：
 
@@ -138,6 +149,16 @@ berba release --home dist/windows-amd64 --out dist --version 0.1.0 --docs .
 ```
 
 它校验发行目录，读取 aapt2 版本，写入 `tools/versions.json`（版本 + aapt2/android.jar/dex 的 SHA-256），复制 `README.md`、`NOTICE`、`docs/`，然后按固定顺序与固定时间戳生成 zip，最后写出 `<zip>.sha256`。相同输入重复打包得到相同哈希，便于发布核对。`berba doctor` 会重新计算这些哈希并逐一比对，因此 shell dex 被篡改或版本漂移会立即被发现。
+
+### GitHub Actions 自动发布
+
+打 `v*` tag 即触发完整发布流程（`ci.yml`），无需本地打包：
+
+1. **build**（ubuntu）：编译 shell dex、组装 linux-amd64 发行包；再用 `GOOS=windows` 交叉编译 CLI，下载官方 `build-tools_r35_windows.zip` 并校验 SHA-256 后提取 `aapt2.exe`，以 `--target-os windows --aapt2-version` 交叉组装 windows-amd64 发行包。两个 zip 作为 artifact 上传。
+2. **windows-smoke**（windows-latest）：解压上面生成的**真实 Windows 发行包**，运行 `berba.exe doctor`（实际执行 aapt2.exe、逐一比对哈希）并 `init` + `build` 一个示例 APK。
+3. **publish**：仅 tag 触发，前两个作业全绿后 `gh release create`，附带两个平台的 zip 与 `.sha256`。
+
+因此推荐的发版方式：`git tag v0.13 && git push origin v0.13`，到 Releases 页面取产物。本地 `package-dist` 脚本仍可用于自测（默认只组装本机平台）。
 
 单独编译 shell：
 

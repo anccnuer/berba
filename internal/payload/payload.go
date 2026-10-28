@@ -50,6 +50,11 @@ func HomeDir(override string) (string, error) {
 }
 
 func Locate(override string) (*Layout, error) {
+	return LocateOn(override, runtime.GOOS)
+}
+
+// LocateOn 按目标平台（而非构建机平台）解析发行目录布局，用于交叉打包。
+func LocateOn(override, goos string) (*Layout, error) {
 	home, err := HomeDir(override)
 	if err != nil {
 		return nil, err
@@ -57,7 +62,7 @@ func Locate(override string) (*Layout, error) {
 	l := &Layout{
 		Home:       home,
 		ToolsDir:   filepath.Join(home, "tools"),
-		Aapt2:      filepath.Join(home, "tools", aapt2Name()),
+		Aapt2:      filepath.Join(home, "tools", aapt2NameFor(goos)),
 		AndroidJar: filepath.Join(home, "tools", "android.jar"),
 		Versions:   filepath.Join(home, "tools", "versions.json"),
 	}
@@ -120,8 +125,8 @@ func requireFile(p string) error {
 	return nil
 }
 
-func aapt2Name() string {
-	if runtime.GOOS == "windows" {
+func aapt2NameFor(goos string) string {
+	if goos == "windows" {
 		return "aapt2.exe"
 	}
 	return "aapt2"

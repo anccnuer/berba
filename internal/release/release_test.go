@@ -6,9 +6,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"testing"
 
 	"berba/internal/aapt2"
@@ -135,5 +137,78 @@ func TestSanitizeVersion(t *testing.T) {
 		if _, err := SanitizeVersion(bad); err == nil {
 			t.Errorf("%q accepted", bad)
 		}
+	}
+}
+
+func stageCross(t *testing.T, targetOS string) string {
+	t.Helper()
+	home := t.TempDir()
+	aapt2File, exe := "aapt2", ""
+	if targetOS == "windows" {
+		aapt2File, exe = "aapt2.exe", ".exe"
+	}
+	files := map[string]string{
+		filepath.Join("tools", aapt2File):       "aapt2",
+		filepath.Join("tools", "android.jar"):   "jar",
+		filepath.Join("payload", "classes.dex"): "dex",
+		"berba" + exe:                           "exe",
+	}
+	names := make([]string, 0, len(files))
+	for name := range files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		p := filepath.Join(home, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(files[name]), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return home
+}
+
+func TestPackageCrossTarget(t *testing.T) {
+	other := "windows"
+	if runtime.GOOS == "windows" {
+		other = "linux"
+	}
+	home := stageCross(t, other)
+
+	if _, err := Package(context.Background(), Options{
+		Home: home, Version: "0.13", TargetOS: other,
+	}); err == nil {
+		t.Fatal("cross packaging without injected aapt2 version must fail")
+	}
+
+	out := t.TempDir()
+	res, err := Package(context.Background(), Options{
+		Home: home, OutDir: out, Version: "0.13",
+		TargetOS: other, TargetArch: "amd64", Aapt2Version: "2.19-cross",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("berba-0.13-%s-amd64.zip", other)
+	if filepath.Base(res.ZipPath) != want {
+		t.Fatalf("zip name = %s, want %s", filepath.Base(res.ZipPath), want)
+	}
+	vf, err := payload.ReadVersions(filepath.Join(home, "tools", "versions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vf.Aapt2.Version != "2.19-cross" || vf.Aapt2.Sha256 == "" || len(vf.Shell.DexSha256) != 1 {
+		t.Fatalf("unexpected versions: %+v", vf)
+	}
+}
+
+func TestPackageRejectsBadTarget(t *testing.T) {
+	home, _ := stage(t)
+	if _, err := Package(context.Background(), Options{
+		Home: home, Version: "0.13", TargetOS: "plan9",
+	}); err == nil {
+		t.Fatal("plan9 target accepted")
 	}
 }

@@ -27,7 +27,9 @@ type Options struct {
 	DocsDir      string
 	Version      string
 	Platform     string
-	Aapt2Version string // 仅测试注入；为空时执行 aapt2 获取
+	TargetOS     string // 空 = 构建机平台；用于交叉打包时决定 aapt2 文件名与 zip 命名
+	TargetArch   string // 空 = 构建机架构；写入 zip 文件名
+	Aapt2Version string // 仅测试或交叉打包注入；为空时执行本机 aapt2 获取
 	Progress     func(string)
 }
 
@@ -55,6 +57,19 @@ func Package(ctx context.Context, opts Options) (*Result, error) {
 	if platform == "" {
 		platform = "android-35"
 	}
+	targetOS := opts.TargetOS
+	if targetOS == "" {
+		targetOS = runtime.GOOS
+	}
+	targetArch := opts.TargetArch
+	if targetArch == "" {
+		targetArch = runtime.GOARCH
+	}
+	switch targetOS {
+	case "linux", "windows", "darwin":
+	default:
+		return nil, fmt.Errorf("不支持的目标平台: %s（可选 linux / windows / darwin）", targetOS)
+	}
 	progress := opts.Progress
 	if progress == nil {
 		progress = func(string) {}
@@ -64,18 +79,21 @@ func Package(ctx context.Context, opts Options) (*Result, error) {
 	}
 
 	progress("校验发行目录")
-	layout, err := payload.Locate(home)
-	if err != nil {
-		return nil, err
-	}
-	tool, err := aapt2.Locate(layout.ToolsDir)
+	layout, err := payload.LocateOn(home, targetOS)
 	if err != nil {
 		return nil, err
 	}
 
 	aapt2Version := opts.Aapt2Version
 	if aapt2Version == "" {
+		if targetOS != runtime.GOOS {
+			return nil, fmt.Errorf("交叉打包目标平台 %s 无法在本机执行 aapt2，需注入 --aapt2-version", targetOS)
+		}
 		progress("读取 aapt2 版本")
+		tool, err := aapt2.Locate(layout.ToolsDir)
+		if err != nil {
+			return nil, err
+		}
 		aapt2Version, err = tool.Version(ctx)
 		if err != nil {
 			return nil, err
@@ -118,7 +136,7 @@ func Package(ctx context.Context, opts Options) (*Result, error) {
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return nil, err
 	}
-	name := fmt.Sprintf("berba-%s-%s-%s.zip", opts.Version, runtime.GOOS, runtime.GOARCH)
+	name := fmt.Sprintf("berba-%s-%s-%s.zip", opts.Version, targetOS, targetArch)
 	zipPath, sum, size, err := writeZip(ctx, home, outDir, name)
 	if err != nil {
 		return nil, err

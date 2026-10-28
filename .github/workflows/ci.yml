@@ -102,6 +102,36 @@ jobs:
           "$RUNNER_TEMP/dist/berba" release --home "$RUNNER_TEMP/dist" --out "$RUNNER_TEMP/release" \
             --version "$VERSION" --docs "$GITHUB_WORKSPACE"
 
+      - name: Cross-package Windows dist
+        env:
+          VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '0.0.0-ci' }}
+          BT_ZIP_URL: https://dl.google.com/android/repository/build-tools_r35_windows.zip
+          BT_ZIP_SHA256: 5753c679a1b90bcf6fbc9945a2ce39dfb9e74f1df0831a1e1866ae5b594326f0
+          AAPT2_EXE_SHA256: cbfe5deda5f7074ce47b6f33818b456ee8046a076a11af13e29c837d3c80c564
+          AAPT2_VERSION_STR: Android Asset Packaging Tool (aapt) 2.19-11948202
+        run: |
+          set -euo pipefail
+          DIST="$RUNNER_TEMP/dist"
+          WIN="$RUNNER_TEMP/dist-windows"
+          mkdir -p "$WIN/tools" "$WIN/payload"
+          echo "==> 交叉编译 berba.exe ($VERSION)"
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath \
+            -ldflags "-s -w -X main.version=$VERSION" -o "$WIN/berba.exe" ./cmd/berba
+          echo "==> 获取并校验官方 Windows build-tools"
+          curl -fsSL -o /tmp/bt.zip "$BT_ZIP_URL"
+          echo "$BT_ZIP_SHA256  /tmp/bt.zip" | sha256sum -c -
+          rm -rf /tmp/btx && mkdir -p /tmp/btx
+          unzip -oj /tmp/bt.zip 'android-15/aapt2.exe' -d /tmp/btx
+          echo "$AAPT2_EXE_SHA256  /tmp/btx/aapt2.exe" | sha256sum -c -
+          cp /tmp/btx/aapt2.exe "$WIN/tools/aapt2.exe"
+          cp "$DIST/tools/android.jar" "$WIN/tools/android.jar"
+          cp "$DIST/payload/classes.dex" "$WIN/payload/classes.dex"
+          echo "==> 以本机 berba 交叉打包 windows/amd64"
+          "$DIST/berba" release --home "$WIN" --out "$RUNNER_TEMP/release" \
+            --version "$VERSION" --platform android-35 --docs "$GITHUB_WORKSPACE" \
+            --target-os windows --target-arch amd64 \
+            --aapt2-version "$AAPT2_VERSION_STR"
+
       - uses: actions/upload-artifact@v4
         with:
           name: ci-apk
@@ -138,3 +168,56 @@ jobs:
         run: |
           go test ./...
           go vet ./...
+
+  windows-smoke:
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ci-release
+          path: rel
+
+      - name: Unzip Windows dist
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP="$(ls rel/*-windows-amd64.zip | head -1)"
+          echo "发行包: $ZIP"
+          test -f "$ZIP.sha256"
+          rm -rf win && mkdir win
+          unzip -q "$ZIP" -d win
+
+      - name: doctor + build example (real aapt2.exe)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./win/berba.exe version
+          ./win/berba.exe doctor
+          ./win/berba.exe init hello --package com.example.win --name "Win 示例"
+          ./win/berba.exe build hello
+          ls hello/dist/*.apk
+
+  publish:
+    if: github.ref_type == 'tag'
+    needs: [build, windows-smoke]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ci-release
+          path: assets
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          ls -la assets
+          gh release create "$TAG" \
+            --title "berba $TAG" \
+            --notes "由 CI 自动构建。解压后运行 \`berba doctor\` 自检工具链与 payload 哈希；每个平台 zip 附带同名 \`.sha256\`。" \
+            assets/*.zip assets/*.zip.sha256
