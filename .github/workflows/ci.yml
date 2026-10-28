@@ -218,6 +218,7 @@ jobs:
           set -euo pipefail
           ls -la assets
           gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
             --title "berba $TAG" \
             --notes "由 CI 自动构建。解压后运行 \`berba doctor\` 自检工具链与 payload 哈希；每个平台 zip 附带同名 \`.sha256\`。" \
             assets/*.zip assets/*.zip.sha256
