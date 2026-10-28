@@ -31,6 +31,7 @@ final class AppConfig {
     final String luaEntry;
     final boolean spa;
     final boolean cleartext;
+    final boolean allowPrivateNetwork;
     final boolean debug;
     final String theme;
     final List<String> origins = new ArrayList<>();
@@ -38,7 +39,8 @@ final class AppConfig {
 
     private AppConfig(String name, String packageName, String versionName, int versionCode,
                       String startUrl, String luaEntry, boolean spa, boolean cleartext,
-                      boolean debug, String theme, List<String> origins) {
+                      boolean allowPrivateNetwork, boolean debug, String theme,
+                      List<String> origins) {
         this.name = name;
         this.packageName = packageName;
         this.versionName = versionName;
@@ -47,6 +49,7 @@ final class AppConfig {
         this.luaEntry = luaEntry;
         this.spa = spa;
         this.cleartext = cleartext;
+        this.allowPrivateNetwork = allowPrivateNetwork;
         this.debug = debug;
         this.theme = theme;
         this.origins.addAll(origins);
@@ -64,6 +67,7 @@ final class AppConfig {
         String luaEntry = null;
         boolean spa = false;
         boolean cleartext = false;
+        boolean allowPrivateNetwork = false;
         boolean debug = false;
         String theme = "light";
         List<String> origins = new ArrayList<>();
@@ -91,6 +95,8 @@ final class AppConfig {
             }
             spa = json.optBoolean("spa", false);
             cleartext = json.optBoolean("cleartext", false);
+            JSONObject http = json.optJSONObject("http");
+            allowPrivateNetwork = http != null && http.optBoolean("allowPrivateNetwork", false);
             debug = json.optBoolean("debug", false);
             theme = json.optString("theme", "light");
             JSONArray arr = json.optJSONArray("allowedOrigins");
@@ -106,7 +112,8 @@ final class AppConfig {
             Log.w(TAG, "app_config.json 读取失败，使用默认配置: " + e);
         }
         return new AppConfig(name == null ? packageName : name, packageName, versionName,
-                versionCode, startUrl, luaEntry, spa, cleartext, debug, theme, origins);
+                versionCode, startUrl, luaEntry, spa, cleartext, allowPrivateNetwork, debug,
+                theme, origins);
     }
 
     static String readAsset(Context ctx, String path) throws Exception {

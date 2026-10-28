@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"time"
 
 	"berba/internal/sign"
 )
@@ -23,13 +25,20 @@ func runKeygen(args []string) error {
 		}
 		path = filepath.Join(cwd, ".berba", "keys", "release.pem")
 	}
-	if _, err := os.Stat(path); err == nil && !*force {
-		key, err := sign.Load(path)
-		if err != nil {
-			return fmt.Errorf("密钥已存在但无法读取: %w（使用 --force 覆盖）", err)
+	if _, err := os.Stat(path); err == nil {
+		if !*force {
+			key, err := sign.Load(path)
+			if err != nil {
+				return fmt.Errorf("密钥已存在但无法读取: %w（使用 --force 覆盖）", err)
+			}
+			fmt.Fprintf(out, "密钥已存在: %s\n指纹 SHA-256: %s\n", path, key.Fingerprint())
+			return nil
 		}
-		fmt.Fprintf(out, "密钥已存在: %s\n指纹 SHA-256: %s\n", path, key.Fingerprint())
-		return nil
+		backup := path + ".bak-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+		if err := os.Rename(path, backup); err != nil {
+			return fmt.Errorf("备份旧密钥失败: %w", err)
+		}
+		fmt.Fprintf(out, "已备份旧密钥: %s\n", backup)
 	}
 	key, err := sign.Generate(path)
 	if err != nil {

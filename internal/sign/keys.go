@@ -8,7 +8,9 @@ import (
 	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"fmt"
+	"io/fs"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -24,6 +26,10 @@ type Key struct {
 }
 
 func Generate(path string) (*Key, error) {
+	return generate(path, false)
+}
+
+func generate(path string, exclusive bool) (*Key, error) {
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return nil, err
@@ -70,7 +76,21 @@ func Generate(path string) (*Key, error) {
 	var buf []byte
 	buf = append(buf, keyPEM...)
 	buf = append(buf, certPEM...)
-	if err := os.WriteFile(path, buf, 0o600); err != nil {
+	if exclusive {
+		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := f.Write(buf); err != nil {
+			f.Close()
+			os.Remove(path)
+			return nil, err
+		}
+		if err := f.Close(); err != nil {
+			os.Remove(path)
+			return nil, err
+		}
+	} else if err := os.WriteFile(path, buf, 0o600); err != nil {
 		return nil, err
 	}
 	return &Key{Private: priv, Cert: cert, CertDER: certDER, CertPEM: certPEM, KeyPEM: keyPEM}, nil
@@ -126,17 +146,26 @@ func Load(path string) (*Key, error) {
 }
 
 func LoadOrCreate(path string) (*Key, bool, error) {
-	if _, err := os.Stat(path); err == nil {
-		k, err := Load(path)
-		return k, false, err
-	} else if !os.IsNotExist(err) {
+	if k, err := Load(path); err == nil {
+		return k, false, nil
+	} else if !errors.Is(err, fs.ErrNotExist) {
 		return nil, false, err
 	}
-	k, err := Generate(path)
-	if err != nil {
+	k, err := generate(path, true)
+	if err == nil {
+		return k, true, nil
+	}
+	if !errors.Is(err, fs.ErrExist) {
 		return nil, false, err
 	}
-	return k, true, nil
+	// 另一进程正在创建同一密钥：等待其写完后再加载。
+	for i := 0; i < 20; i++ {
+		if existing, lerr := Load(path); lerr == nil {
+			return existing, false, nil
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return nil, false, fmt.Errorf("密钥文件已存在但无法读取: %s", path)
 }
 
 func (k *Key) Fingerprint() string {

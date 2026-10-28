@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"os"
-	"path"
+	"sort"
 	"strings"
 )
 
@@ -43,14 +43,16 @@ func Build(entries []Entry) ([]byte, error) {
 	if len(entries) > 0xFFFF {
 		return nil, fmt.Errorf("条目过多")
 	}
-	seen := make(map[string]bool, len(entries))
-	preparedEntries := make([]prepared, 0, len(entries))
-	for _, e := range entries {
+	// 固定条目顺序，保证相同输入产出字节一致。
+	ordered := append([]Entry(nil), entries...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return strings.ReplaceAll(ordered[i].Name, "\\", "/") < strings.ReplaceAll(ordered[j].Name, "\\", "/")
+	})
+	seen := make(map[string]bool, len(ordered))
+	preparedEntries := make([]prepared, 0, len(ordered))
+	for _, e := range ordered {
 		name := strings.ReplaceAll(e.Name, "\\", "/")
-		if name == "" || strings.HasPrefix(name, "/") || strings.HasSuffix(name, "/") {
-			return nil, fmt.Errorf("非法 zip 条目名: %q", e.Name)
-		}
-		if path.Clean(name) != name || strings.Contains(name, "..") {
+		if !safeEntryName(name) {
 			return nil, fmt.Errorf("非法 zip 条目名: %q", e.Name)
 		}
 		if len(name) > 0xFFFF {
@@ -109,6 +111,9 @@ func Build(entries []Entry) ([]byte, error) {
 	var offset uint64
 	for i := range preparedEntries {
 		pe := &preparedEntries[i]
+		if offset > 0xFFFFFFFF {
+			return nil, fmt.Errorf("APK 超过 4GB，暂不支持")
+		}
 		pe.localOffset = uint32(offset)
 		base := offset + 30 + uint64(len(pe.name))
 		pad := paddingFor(base, pe.align)

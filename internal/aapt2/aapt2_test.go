@@ -27,16 +27,21 @@ func TestMapError(t *testing.T) {
 		msg  string
 		want string
 	}{
-		{"AndroidManifest.xml:3: error: attribute package not found", "Manifest 有误"},
+		{"AndroidManifest.xml:3: error: attribute package not found", "Manifest 或资源有误"},
+		{"Android resource linking failed\nmore detail", "Manifest 或资源有误"},
 		{"error: not a valid PNG file", "图标文件损坏"},
 		{"Invalid file name: res/x y.png", "资源文件名不合法"},
 		{"something else", "链接资源失败: something else"},
 	}
 	for _, c := range cases {
-		got := mapError("链接资源", errString(c.msg)).Error()
+		err := &runError{code: 1, stderr: c.msg, err: errString("exit status 1")}
+		got := mapError("链接资源", err).Error()
 		if !strings.Contains(got, c.want) {
 			t.Errorf("mapError(%q) = %q, want contains %q", c.msg, got, c.want)
 		}
+	}
+	if got := mapError("链接资源", errString("plain failure")).Error(); !strings.Contains(got, "plain failure") {
+		t.Errorf("plain error = %q", got)
 	}
 }
 

@@ -14,6 +14,7 @@
   "cleartext": false,
   "permissions": ["CAMERA", "ACCESS_FINE_LOCATION"],
   "metaData": { "com.example.channel": "internal" },
+  "deepLinks": ["myapp://open"],
   "web": {
     "dir": "www",
     "startUrl": "https://appassets.androidhost/index.html",
@@ -21,6 +22,7 @@
     "allowedOrigins": []
   },
   "lua": { "dir": "lua", "entry": "main.lua" },
+  "http": { "allowPrivateNetwork": false },
   "debug": false
 }
 ```
@@ -33,21 +35,25 @@
 | `package` | string | 必填 | 应用包名，同时作为 APK 的 applicationId |
 | `versionName` | string | 必填 | 版本名，显示给用户 |
 | `versionCode` | int | `1` | 版本号，必须 ≥ 1；升级时递增 |
-| `icon` | string | 空 | PNG/JPG 路径；为空时按应用名首字母生成默认图标 |
+| `icon` | string | 空 | PNG/JPG 路径；为空时按应用名生成一个默认图标 |
 | `orientation` | string | `auto` | `auto` / `portrait` / `landscape` |
 | `theme` | string | `light` | `light` / `dark` / `device`，映射到 Android 框架主题 |
 | `cleartext` | bool | `false` | 是否允许明文 HTTP（不推荐） |
 | `permissions` | string[] | `[]` | 权限别名或完整 `android.permission.X`；`INTERNET` 会自动追加 |
 | `metaData` | object | `{}` | 写入 `<application>` 的 `<meta-data>`，键值均为字符串 |
-| `web.dir` | string | `www` | 前端资源目录（相对项目根目录） |
+| `deepLinks` | string[] | `[]` | 自定义 scheme 深链，如 `"myapp://open"`；生成 VIEW intent-filter 并启用 `launchMode="singleTask"` |
+| `web.dir` | string | `www` | 前端资源目录（相对项目根目录，不得越出项目根目录） |
 | `web.startUrl` | string | `https://appassets.androidhost/index.html` | 启动页面 |
 | `web.spa` | bool | `false` | 本地路由无扩展名时回退到 `index.html` |
 | `web.allowedOrigins` | string[] | `[]` | 额外允许的 origin（用于远程页面、导航与 JS 桥） |
-| `lua.dir` | string | `lua` | Lua 目录（相对项目根目录） |
+| `lua.dir` | string | `lua` | Lua 目录（相对项目根目录，不得越出项目根目录） |
 | `lua.entry` | string | `main.lua` | Lua 入口，相对 `lua.dir` |
+| `http.allowPrivateNetwork` | bool | `false` | 允许 Lua `http` 访问本机、局域网与链路本地地址 |
 | `debug` | bool | `false` | 开启 WebView 远程调试与 `android:debuggable` |
 
-也可以构建时用 `berba build --debug` 临时开启调试，无需修改配置。
+也可以构建时用 `berba build --debug` 临时开启调试，无需修改配置。debug 产物会命名为 `<package>-<versionName>-debug.apk`，不会覆盖 release 产物。
+
+配置使用严格 JSON 解析：未知字段（包括拼写错误）会直接导致构建失败。
 
 ## 包名
 
@@ -98,11 +104,24 @@
 
 运行时申请权限请使用 Lua 的 `permission.request`，见 [lua-api.md](lua-api.md)。
 
+## 深链
+
+`deepLinks` 声明自定义 scheme，供其他应用或浏览器唤起本应用：
+
+```json
+{ "deepLinks": ["myapp://open", "notes://view/doc"] }
+```
+
+- 每条链接解析出 `scheme` 与 `host`，按 `scheme+host` 生成 `<intent-filter>`（VIEW + DEFAULT + BROWSABLE）；`host` 为空时匹配该 scheme 的全部链接。
+- scheme 必须以小写字母开头（仅小写字母、数字、`+ . -`），禁止 `http/https/file/content/data`；重复条目自动去重，最多 16 条。
+- 声明深链后 Activity 自动使用 `launchMode="singleTask"`，保证第二次唤起走 `onNewIntent`。
+- Lua 侧通过 `app.on("newIntent", fn)` 收到完整 URL 字符串（冷启动时会在 `create` 之后补发）。深链内容不可信，务必校验后再使用。
+
 ## 启动页面与 origin
 
-**本地页面**：把 `web.startUrl` 设为 `https://appassets.androidhost/...`。该域名由 WebView 拦截并映射到 `assets/www/`，不会产生网络请求；入口文件必须存在于 `www.dir` 中，路径越界会被拒绝。本地 origin 始终在白名单内。
+**本地页面**：把 `web.startUrl` 设为 `https://appassets.androidhost/...`。该域名由 WebView 拦截并映射到 `assets/www/`，不会产生网络请求；入口文件必须存在于 `www.dir` 中，路径越界会被拒绝。使用本地启动页时，本地 origin 会自动加入白名单。
 
-**远程页面**：`web.startUrl` 可以是 `https://` 地址；使用 `http://` 时必须同时设置 `"cleartext": true`。远程页面的 origin 必须加入 `web.allowedOrigins`，否则导航与 JS 桥都会被拒绝：
+**远程页面**：`web.startUrl` 可以是 `https://` 地址；使用 `http://` 时必须同时设置 `"cleartext": true`。启动页自身的 origin 会自动加入白名单；页面需要访问其他 origin（API、iframe 等）时，仍需写入 `web.allowedOrigins`：
 
 ```json
 {
@@ -115,8 +134,18 @@
 
 `allowedOrigins` 只接受 origin（协议 + 主机 + 可选端口），不能带路径；统一转为小写去重。
 
+## HTTP
+
+Lua 的 `http.*` 默认拒绝 loopback、局域网、链路本地、CGNAT 等私网地址，并逐跳校验重定向目标。确实需要访问本机服务（例如本地调试网关）时显式开启：
+
+```json
+{ "http": { "allowPrivateNetwork": true } }
+```
+
+开启后仍受 `cleartext` 约束：`http://` 地址只有在 `"cleartext": true` 时才可访问。
+
 ## Lua
 
-若 `lua.dir` 存在且入口文件可读，构建时会把整个目录写入 APK 的 `assets/lua/`，并启用 Lua 运行时。没有 Lua 目录时应用照常启动，只是 `window.berba.call` 会返回“未注册的桥接方法”。
+若 `lua.dir` 存在且入口文件可读，构建时会把整个目录写入 APK 的 `assets/lua/`，并启用 Lua 运行时。整个 `lua.dir` 不存在时应用照常启动，只是 `window.berba.call` 会返回“未注册的桥接方法”；显式配置了 `lua.dir` 却不存在时会输出警告，目录存在但入口文件缺失会直接构建失败。
 
 `lua.entry` 与 `require` 的路径都会被规范化，禁止通过 `../` 越出 `lua.dir`。

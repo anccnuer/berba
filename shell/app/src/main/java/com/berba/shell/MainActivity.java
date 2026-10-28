@@ -1,27 +1,38 @@
 package com.berba.shell;
 
+import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
 import android.content.res.Configuration;
 import android.graphics.Color;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
+import android.os.VibratorManager;
 import android.util.Log;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
+import android.webkit.JsPromptResult;
+import android.webkit.JsResult;
+import android.webkit.ValueCallback;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
+import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -39,10 +50,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.concurrent.Callable;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * APK 宿主 Activity：代码构建 WebView，加载 assets/www，启动 Lua 运行时。
@@ -50,6 +57,7 @@ import java.util.concurrent.atomic.AtomicReference;
 public class MainActivity extends Activity {
     private static final String TAG = "berba";
     private static final String PREFS = "berba";
+    private static final int FILE_CHOOSER_REQUEST = 2001;
 
     private AppConfig config;
     private WebView webView;
@@ -61,21 +69,34 @@ public class MainActivity extends Activity {
     private int nextRequestCode = 1001;
     private volatile boolean luaLoadRequested;
     private boolean fullscreen;
+    private boolean luaReady;
+    private boolean resumed;
+    private volatile String pageOrigin = "";
+    private volatile String pendingDeepLink = "";
+    private volatile boolean canGoBack;
+    private Object backRegistration;
+    private long lastBackAt;
+    private ValueCallback<Uri[]> pendingFileChooser;
+    private boolean statusBarCustom;
+    private int statusBarColor;
+    private boolean statusBarLight;
 
     /** 把 API 33 类型隔离到独立类，避免旧系统验证 MainActivity 时解析新类。 */
     private static final class BackApi33 {
-        private static OnBackInvokedCallback callback;
-
-        static void register(MainActivity activity) {
-            callback = activity::handleBack;
-            activity.getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
-                    OnBackInvokedDispatcher.PRIORITY_DEFAULT, callback);
+        private BackApi33() {
         }
 
-        static void unregister(MainActivity activity) {
-            if (callback != null) {
-                activity.getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(callback);
-                callback = null;
+        static Object register(MainActivity activity) {
+            OnBackInvokedCallback callback = activity::handleBack;
+            activity.getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                    OnBackInvokedDispatcher.PRIORITY_DEFAULT, callback);
+            return callback;
+        }
+
+        static void unregister(MainActivity activity, Object registration) {
+            if (registration instanceof OnBackInvokedCallback) {
+                activity.getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(
+                        (OnBackInvokedCallback) registration);
             }
         }
     }
@@ -114,6 +135,9 @@ public class MainActivity extends Activity {
         bridge = new JsBridge(this, lua);
         webView.addJavascriptInterface(bridge, JsBridge.NAME);
         webView.setWebViewClient(new AssetServer(this, config, bridge));
+        webView.setWebChromeClient(new BridgeChromeClient(this));
+        webView.setDownloadListener((url, userAgent, contentDisposition, mimeType, contentLength)
+                -> handleDownload(url));
         root.addView(webView);
         applyInsets(root);
         setContentView(root);
@@ -122,6 +146,7 @@ public class MainActivity extends Activity {
         setupWindow();
         registerBackCallback();
 
+        pendingDeepLink = deepLinkUrl(getIntent());
         lua.start(this::onLuaReady);
     }
 
@@ -168,7 +193,7 @@ public class MainActivity extends Activity {
 
     private void registerBackCallback() {
         if (Build.VERSION.SDK_INT >= 33) {
-            BackApi33.register(this);
+            backRegistration = BackApi33.register(this);
         }
     }
 
@@ -178,19 +203,44 @@ public class MainActivity extends Activity {
             window.setDecorFitsSystemWindows(false);
             window.setStatusBarColor(Color.TRANSPARENT);
             window.setNavigationBarColor(Color.TRANSPARENT);
-            applySystemBarAppearance(window);
         }
+        applySystemBarAppearance(window);
     }
 
+    @SuppressWarnings("deprecation")
     private void applySystemBarAppearance(Window window) {
-        WindowInsetsController controller = insetsController(window);
-        if (controller == null) {
+        boolean dark = isDarkTheme();
+        boolean lightStatus = statusBarCustom ? statusBarLight : !dark;
+        if (statusBarCustom) {
+            window.setStatusBarColor(statusBarColor);
+        }
+        if (Build.VERSION.SDK_INT >= 30) {
+            WindowInsetsController controller = insetsController(window);
+            if (controller == null) {
+                return;
+            }
+            int mask = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                    | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+            int appearance = 0;
+            if (lightStatus) {
+                appearance |= WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS;
+            }
+            if (!dark) {
+                appearance |= WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+            }
+            controller.setSystemBarsAppearance(appearance, mask);
             return;
         }
-        boolean dark = isDarkTheme();
-        int mask = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
-                | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
-        controller.setSystemBarsAppearance(dark ? 0 : mask, mask);
+        if (statusBarCustom) {
+            View decor = window.getDecorView();
+            int flags = decor.getSystemUiVisibility();
+            if (lightStatus) {
+                flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            } else {
+                flags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            }
+            decor.setSystemUiVisibility(flags);
+        }
     }
 
     private static WindowInsetsController insetsController(Window window) {
@@ -254,20 +304,58 @@ public class MainActivity extends Activity {
         if (lua == null) {
             return;
         }
+        luaReady = true;
         lua.onAppEvent("create", () -> {
             if (!luaLoadRequested && webView != null) {
                 webView.loadUrl(config.startUrl);
             }
+            if (resumed && lua != null) {
+                lua.onAppEvent("resume");
+            }
+            deliverDeepLink();
         });
+    }
+
+    private void deliverDeepLink() {
+        String url = pendingDeepLink;
+        if (url == null || url.isEmpty() || lua == null) {
+            return;
+        }
+        pendingDeepLink = "";
+        lua.onAppEvent("newIntent", LuaValue.valueOf(url));
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        String url = deepLinkUrl(intent);
+        if (url.isEmpty()) {
+            return;
+        }
+        if (luaReady && lua != null) {
+            lua.onAppEvent("newIntent", LuaValue.valueOf(url));
+        } else {
+            pendingDeepLink = url;
+        }
+    }
+
+    private static String deepLinkUrl(Intent intent) {
+        if (intent == null) {
+            return "";
+        }
+        Uri data = intent.getData();
+        return data == null ? "" : data.toString();
     }
 
     @Override
     protected void onPause() {
         super.onPause();
+        resumed = false;
         if (webView != null) {
             webView.onPause();
         }
-        if (lua != null) {
+        if (luaReady && lua != null) {
             lua.onAppEvent("pause");
         }
     }
@@ -275,6 +363,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        resumed = true;
         if (fullscreen) {
             // 附着后再应用一次，覆盖进入前后台或早期调用时 controller 尚不可用的情况。
             applyFullscreen(true);
@@ -285,24 +374,26 @@ public class MainActivity extends Activity {
         if (webView != null) {
             webView.onResume();
         }
-        if (lua != null) {
+        if (luaReady && lua != null) {
             lua.onAppEvent("resume");
         }
     }
 
     @Override
     protected void onDestroy() {
-        if (Build.VERSION.SDK_INT >= 33) {
-            BackApi33.unregister(this);
+        if (backRegistration != null) {
+            BackApi33.unregister(this, backRegistration);
+            backRegistration = null;
+        }
+        // 先让 Lua 收到 destroy，再销毁 WebView，避免 Lua 侧访问已释放的宿主。
+        if (lua != null) {
+            lua.shutdown();
+            lua = null;
         }
         if (webView != null) {
             webView.removeJavascriptInterface(JsBridge.NAME);
             webView.destroy();
             webView = null;
-        }
-        if (lua != null) {
-            lua.shutdown();
-            lua = null;
         }
         super.onDestroy();
     }
@@ -324,6 +415,11 @@ public class MainActivity extends Activity {
     }
 
     private void handleBack() {
+        long now = SystemClock.uptimeMillis();
+        if (now - lastBackAt < 500) {
+            return;
+        }
+        lastBackAt = now;
         if (lua != null && lua.hasHandlers("back")) {
             lua.onBack(this::defaultBack);
         } else {
@@ -347,11 +443,33 @@ public class MainActivity extends Activity {
         return prefs;
     }
 
+    // ---- 页面状态 ----
+
+    void setPageOrigin(String origin) {
+        pageOrigin = origin == null ? "" : origin;
+    }
+
+    String pageOrigin() {
+        return pageOrigin;
+    }
+
+    void updateCanGoBack(boolean value) {
+        canGoBack = value;
+    }
+
     // ---- WebView 控制（可在任意线程调用） ----
 
     void loadFromLua(final String url) {
         if (!isHttpUrl(url)) {
             throw new IllegalArgumentException("web.load 只支持 http/https");
+        }
+        android.net.Uri uri = android.net.Uri.parse(url);
+        if ("http".equalsIgnoreCase(uri.getScheme()) && !config.cleartext) {
+            throw new IllegalArgumentException("明文 HTTP 未开启（cleartext: false）");
+        }
+        String origin = AssetServer.originOf(uri);
+        if (!config.originAllowed(origin)) {
+            throw new IllegalArgumentException("origin 不在白名单: " + origin);
         }
         luaLoadRequested = true;
         runOnUiThread(() -> {
@@ -377,9 +495,8 @@ public class MainActivity extends Activity {
         });
     }
 
-    boolean canGoBackOnMain() {
-        Boolean result = callOnMain(() -> webView != null && webView.canGoBack());
-        return result != null && result;
+    boolean canGoBackCached() {
+        return canGoBack;
     }
 
     void evaluateJs(final String script, final LuaValue callback) {
@@ -433,8 +550,18 @@ public class MainActivity extends Activity {
 
     // ---- UI ----
 
-    void toastOnMain(final String message) {
-        runOnUiThread(() -> Toast.makeText(this, message, Toast.LENGTH_SHORT).show());
+    void toastOnMain(final String message, final boolean longDuration) {
+        runOnUiThread(() -> Toast.makeText(this, message,
+                longDuration ? Toast.LENGTH_LONG : Toast.LENGTH_SHORT).show());
+    }
+
+    void setStatusBarOnMain(final int color, final boolean light) {
+        runOnUiThread(() -> {
+            statusBarCustom = true;
+            statusBarColor = color;
+            statusBarLight = light;
+            applySystemBarAppearance(getWindow());
+        });
     }
 
     void showAlert(final String message) {
@@ -474,6 +601,58 @@ public class MainActivity extends Activity {
                 Log.e(TAG, "ui.confirm 回调错误", t);
             }
         });
+    }
+
+    void showJsAlert(final String message, final JsResult result) {
+        runOnUiThread(() -> {
+            if (isFinishing() || isDestroyed()) {
+                result.cancel();
+                return;
+            }
+            new AlertDialog.Builder(this)
+                    .setMessage(message)
+                    .setOnCancelListener(d -> result.cancel())
+                    .setPositiveButton(android.R.string.ok, (d, w) -> result.confirm())
+                    .show();
+        });
+    }
+
+    void showJsConfirm(final String message, final JsResult result) {
+        runOnUiThread(() -> {
+            if (isFinishing() || isDestroyed()) {
+                result.cancel();
+                return;
+            }
+            new AlertDialog.Builder(this)
+                    .setMessage(message)
+                    .setOnCancelListener(d -> result.cancel())
+                    .setPositiveButton(android.R.string.ok, (d, w) -> result.confirm())
+                    .setNegativeButton(android.R.string.cancel, (d, w) -> result.cancel())
+                    .show();
+        });
+    }
+
+    void showJsPrompt(final String message, final String defaultValue, final JsPromptResult result) {
+        runOnUiThread(() -> {
+            if (isFinishing() || isDestroyed()) {
+                result.cancel();
+                return;
+            }
+            final EditText input = new EditText(this);
+            input.setText(defaultValue == null ? "" : defaultValue);
+            new AlertDialog.Builder(this)
+                    .setMessage(message)
+                    .setView(input)
+                    .setOnCancelListener(d -> result.cancel())
+                    .setPositiveButton(android.R.string.ok,
+                            (d, w) -> result.confirm(input.getText().toString()))
+                    .setNegativeButton(android.R.string.cancel, (d, w) -> result.cancel())
+                    .show();
+        });
+    }
+
+    void onRendererGone(final String reason) {
+        runOnUiThread(() -> showFatalError(new RuntimeException("WebView 渲染进程退出: " + reason)));
     }
 
     void finishOnMain() {
@@ -590,6 +769,53 @@ public class MainActivity extends Activity {
         }
     }
 
+    void openFileChooser(final ValueCallback<Uri[]> callback, final Intent intent) {
+        runOnUiThread(() -> {
+            if (isFinishing() || isDestroyed()) {
+                callback.onReceiveValue(null);
+                return;
+            }
+            if (pendingFileChooser != null) {
+                pendingFileChooser.onReceiveValue(null);
+            }
+            pendingFileChooser = callback;
+            try {
+                startActivityForResult(intent, FILE_CHOOSER_REQUEST);
+            } catch (Exception e) {
+                Log.w(TAG, "无法打开文件选择器", e);
+                pendingFileChooser = null;
+                callback.onReceiveValue(null);
+                Toast.makeText(this, "没有可用的文件选择器", Toast.LENGTH_SHORT).show();
+            }
+        });
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == FILE_CHOOSER_REQUEST) {
+            ValueCallback<Uri[]> callback = pendingFileChooser;
+            pendingFileChooser = null;
+            if (callback == null) {
+                return;
+            }
+            Uri[] result = null;
+            if (resultCode == RESULT_OK && data != null) {
+                ClipData clip = data.getClipData();
+                if (clip != null && clip.getItemCount() > 0) {
+                    result = new Uri[clip.getItemCount()];
+                    for (int i = 0; i < clip.getItemCount(); i++) {
+                        result[i] = clip.getItemAt(i).getUri();
+                    }
+                } else if (data.getData() != null) {
+                    result = new Uri[]{data.getData()};
+                }
+            }
+            callback.onReceiveValue(result);
+            return;
+        }
+        super.onActivityResult(requestCode, resultCode, data);
+    }
+
     // ---- 其他 ----
 
     String clipboardText() {
@@ -605,35 +831,95 @@ public class MainActivity extends Activity {
         return text == null ? "" : text.toString();
     }
 
-    <T> T callOnMain(Callable<T> task) {
-        if (Looper.myLooper() == Looper.getMainLooper()) {
-            try {
-                return task.call();
-            } catch (Exception e) {
-                return null;
-            }
+    boolean setClipboardTextOnMain(final String text) {
+        if (text == null) {
+            return false;
         }
-        final AtomicReference<T> ref = new AtomicReference<>();
-        final CountDownLatch latch = new CountDownLatch(1);
-        mainHandler.post(() -> {
-            try {
-                ref.set(task.call());
-            } catch (Exception e) {
-                Log.w(TAG, "主线程任务失败: " + e);
-            } finally {
-                latch.countDown();
+        runOnUiThread(() -> {
+            ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+            if (cm != null) {
+                cm.setPrimaryClip(ClipData.newPlainText("berba", text));
             }
         });
-        try {
-            if (!latch.await(5, TimeUnit.SECONDS)) {
-                Log.w(TAG, "主线程任务超时");
-                return null;
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return null;
+        return true;
+    }
+
+    boolean vibrateOnMain(final long ms) {
+        if (!hasPermission(Manifest.permission.VIBRATE)) {
+            return false;
         }
-        return ref.get();
+        runOnUiThread(() -> {
+            Vibrator vibrator;
+            if (Build.VERSION.SDK_INT >= 31) {
+                VibratorManager manager =
+                        (VibratorManager) getSystemService(Context.VIBRATOR_MANAGER_SERVICE);
+                vibrator = manager == null ? null : manager.getDefaultVibrator();
+            } else {
+                vibrator = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
+            }
+            if (vibrator == null || !vibrator.hasVibrator()) {
+                return;
+            }
+            if (Build.VERSION.SDK_INT >= 26) {
+                vibrator.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE));
+            } else {
+                vibrator.vibrate(ms);
+            }
+        });
+        return true;
+    }
+
+    void shareOnMain(final String text, final String url) {
+        StringBuilder content = new StringBuilder();
+        if (text != null && !text.isEmpty()) {
+            content.append(text);
+        }
+        if (url != null && !url.isEmpty()) {
+            if (content.length() > 0) {
+                content.append('\n');
+            }
+            content.append(url);
+        }
+        final String payload = content.toString();
+        runOnUiThread(() -> {
+            Intent send = new Intent(Intent.ACTION_SEND);
+            send.setType("text/plain");
+            send.putExtra(Intent.EXTRA_TEXT, payload);
+            try {
+                startActivity(Intent.createChooser(send, null));
+            } catch (Exception e) {
+                Log.w(TAG, "无法打开分享面板", e);
+                Toast.makeText(this, "没有可用的分享应用", Toast.LENGTH_SHORT).show();
+            }
+        });
+    }
+
+    void handleDownload(final String url) {
+        if (!isHttpUrl(url)) {
+            Log.w(TAG, "忽略非 http(s) 下载: " + url);
+            return;
+        }
+        openUrlOnMain(url);
+    }
+
+    void openUrlOnMain(final String url) {
+        if (!isHttpUrl(url)) {
+            throw new IllegalArgumentException("只支持 http/https");
+        }
+        final Uri uri = Uri.parse(url);
+        runOnUiThread(() -> {
+            Intent view = new Intent(Intent.ACTION_VIEW, uri);
+            if (view.resolveActivity(getPackageManager()) == null) {
+                Toast.makeText(this, "没有可打开该链接的应用", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            try {
+                startActivity(view);
+            } catch (Exception e) {
+                Log.w(TAG, "无法打开链接", e);
+                Toast.makeText(this, "无法打开链接", Toast.LENGTH_SHORT).show();
+            }
+        });
     }
 
     static boolean isHttpUrl(String url) {

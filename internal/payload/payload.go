@@ -131,6 +131,12 @@ type VersionsFile struct {
 	Version    string        `json:"version"`
 	Aapt2      VersionedHash `json:"aapt2"`
 	AndroidJar VersionedHash `json:"androidJar"`
+	Shell      ShellVersions `json:"shell"`
+}
+
+// ShellVersions 记录 payload/classes*.dex 的哈希（与 Locate 排序一致）。
+type ShellVersions struct {
+	DexSha256 []string `json:"dexSha256"`
 }
 
 type VersionedHash struct {

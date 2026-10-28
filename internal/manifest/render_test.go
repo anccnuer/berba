@@ -1,6 +1,7 @@
 package manifest
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
@@ -76,6 +77,59 @@ func TestRenderAutoOrientation(t *testing.T) {
 	}
 	if strings.Contains(string(data), "screenOrientation") {
 		t.Fatal("auto orientation should not pin screenOrientation")
+	}
+}
+
+func TestRenderDeterministic(t *testing.T) {
+	p := testProject()
+	p.Config.MetaData = map[string]string{"z": "1", "a": "2", "m": "3"}
+	first, err := Render(p, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 20; i++ {
+		next, err := Render(p, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(first, next) {
+			t.Fatal("manifest output is not deterministic")
+		}
+	}
+	out := string(first)
+	ia := strings.Index(out, `<meta-data android:name="a"`)
+	im := strings.Index(out, `<meta-data android:name="m"`)
+	iz := strings.Index(out, `<meta-data android:name="z"`)
+	if ia < 0 || im < 0 || iz < 0 || !(ia < im && im < iz) {
+		t.Fatalf("meta-data is not sorted: a=%d m=%d z=%d", ia, im, iz)
+	}
+}
+
+func TestRenderDeepLinks(t *testing.T) {
+	p := testProject()
+	p.DeepLinks = []config.DeepLink{{Scheme: "myapp", Host: "open"}, {Scheme: "notes", Host: ""}}
+	data, err := Render(p, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := string(data)
+	for _, want := range []string{
+		`android:launchMode="singleTask"`,
+		`<action android:name="android.intent.action.VIEW"/>`,
+		`android:scheme="myapp" android:host="open"`,
+		`android:scheme="notes"/>`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("manifest missing %s\n%s", want, out)
+		}
+	}
+
+	plain, err := Render(testProject(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(plain), "singleTask") || strings.Contains(string(plain), "intent.action.VIEW") {
+		t.Fatalf("无深链时不应出现深链配置:\n%s", plain)
 	}
 }
 

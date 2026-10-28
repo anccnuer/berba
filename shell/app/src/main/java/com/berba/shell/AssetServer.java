@@ -3,6 +3,7 @@ package com.berba.shell;
 import android.graphics.Bitmap;
 import android.net.Uri;
 import android.util.Log;
+import android.webkit.RenderProcessGoneDetail;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
@@ -284,6 +285,9 @@ final class AssetServer extends WebViewClient {
         if (!"https".equals(scheme) && !"http".equals(scheme)) {
             return false;
         }
+        if ("http".equals(scheme) && !config.cleartext) {
+            return false;
+        }
         return config.originAllowed(originOf(uri));
     }
 
@@ -305,11 +309,20 @@ final class AssetServer extends WebViewClient {
     @Override
     public void onPageStarted(WebView view, String url, Bitmap favicon) {
         super.onPageStarted(view, url, favicon);
-        String origin = originOf(Uri.parse(url));
-        if (!config.originAllowed(origin)) {
-            view.stopLoading();
+        Uri uri = Uri.parse(url);
+        String scheme = uri.getScheme();
+        if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) {
+            activity.setPageOrigin("");
             return;
         }
+        String origin = originOf(uri);
+        if (!allowed(uri)) {
+            activity.setPageOrigin("");
+            view.stopLoading();
+            activity.onWebErrorEvent("导航被拒绝：origin 不在白名单", url);
+            return;
+        }
+        activity.setPageOrigin(origin);
         view.evaluateJavascript(new String(shim, StandardCharsets.UTF_8), null);
         activity.onPageStartedEvent(url);
     }
@@ -317,11 +330,37 @@ final class AssetServer extends WebViewClient {
     @Override
     public void onPageFinished(WebView view, String url) {
         super.onPageFinished(view, url);
-        // onPageStarted 时注入可能被新文档丢弃，结束时再补一次（shim 内部幂等）。
-        if (config.originAllowed(originOf(Uri.parse(url)))) {
+        Uri uri = Uri.parse(url);
+        if (allowed(uri)) {
+            activity.setPageOrigin(originOf(uri));
+            // onPageStarted 时注入可能被新文档丢弃，结束时再补一次（shim 内部幂等）。
             view.evaluateJavascript(new String(shim, StandardCharsets.UTF_8), null);
         }
         activity.onPageFinishedEvent(url);
+    }
+
+    @Override
+    public void doUpdateVisitedHistory(WebView view, String url, boolean isReload) {
+        super.doUpdateVisitedHistory(view, url, isReload);
+        activity.updateCanGoBack(view.canGoBack());
+    }
+
+    @Override
+    public void onReceivedHttpError(WebView view, WebResourceRequest request,
+                                    WebResourceResponse errorResponse) {
+        super.onReceivedHttpError(view, request, errorResponse);
+        if (request.isForMainFrame()) {
+            activity.onWebErrorEvent("页面返回 HTTP " + errorResponse.getStatusCode(),
+                    request.getUrl().toString());
+        }
+    }
+
+    @Override
+    public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
+        String reason = detail == null ? "unknown" : "crash=" + detail.didCrash();
+        Log.e(TAG, "WebView 渲染进程退出: " + reason);
+        activity.onRendererGone(reason);
+        return true;
     }
 
     @Override

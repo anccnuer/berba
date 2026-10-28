@@ -40,7 +40,7 @@ public final class JsBridge {
     }
 
     @JavascriptInterface
-    public void dispatch(String reqId, String reqToken, String name, String argsJson, String origin) {
+    public void dispatch(String reqId, String reqToken, String name, String argsJson) {
         if (reqId == null || name == null) {
             return;
         }
@@ -48,6 +48,8 @@ public final class JsBridge {
             Log.w(TAG, "桥调用 token 不匹配，已拒绝");
             return;
         }
+        // origin 由原生侧按当前文档记录，不信任页面自报。
+        String origin = activity.pageOrigin();
         if (!activity.config().originAllowed(origin)) {
             Log.w(TAG, "桥调用 origin 不在白名单: " + origin);
             return;
@@ -74,7 +76,8 @@ public final class JsBridge {
         String t = JSONObject.quote(token);
         return "(function(){"
                 + "if(window.berba&&window.berba.__berba){return;}"
-                + "var callbacks={},events={},seq=0,native=window.__berbaNative;"
+                + "var callbacks={},events={},seq=0,native=window.__berbaNative,"
+                + "epoch=Math.random().toString(36).slice(2)+'.';"
                 + "window.__berbaResolve=function(id,ok,payload){"
                 + "var e=callbacks[id];if(!e){return;}delete callbacks[id];"
                 + "var v;try{v=JSON.parse(payload);}catch(x){v=payload;}"
@@ -83,10 +86,10 @@ public final class JsBridge {
                 + "var list=events[name];if(!list){return;}"
                 + "var v;try{v=JSON.parse(payload);}catch(x){v=payload;}"
                 + "for(var i=0;i<list.length;i++){try{list[i](v);}catch(e){console.error(e);}}};"
-                + "window.berba={__berba:true,token:" + t + ","
+                + "window.berba={__berba:true,"
                 + "call:function(name,args){return new Promise(function(resolve,reject){"
-                + "var id=String(++seq);callbacks[id]={resolve:resolve,reject:reject};"
-                + "try{native.dispatch(id," + t + ",String(name),JSON.stringify(args===undefined?null:args),String(location.origin));}"
+                + "var id=epoch+(++seq);callbacks[id]={resolve:resolve,reject:reject};"
+                + "try{native.dispatch(id," + t + ",String(name),JSON.stringify(args===undefined?null:args));}"
                 + "catch(err){delete callbacks[id];reject(err);}});},"
                 + "on:function(name,fn){(events[name]=events[name]||[]).push(fn);return fn;},"
                 + "off:function(name,fn){var l=events[name];if(!l){return;}var i=l.indexOf(fn);if(i>=0){l.splice(i,1);}}};"

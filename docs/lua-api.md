@@ -1,6 +1,6 @@
 # Lua API 与 JS 桥
 
-运行时为 LuaJ 3.0.1（Lua 5.2 语义），只加载白名单库：`base`、`table`、`string`、`math`、`coroutine`、`bit32`。**没有** `io`、`os`、`package`、`debug`、`utf8`、`luajava`，`dofile`、`loadfile` 被移除。Lua 代码无法直接访问 Java 或文件系统以外的系统能力。
+运行时为 LuaJ 3.0.1（Lua 5.2 语义），只加载白名单库：`base`、`table`、`string`、`math`、`coroutine`、`bit32`。**没有** `io`、`os`、`package`、`debug`、`utf8`、`luajava`，`load`、`dofile`、`loadfile` 被移除。Lua 代码无法直接访问 Java 或文件系统以外的系统能力。
 
 所有 Lua 回调在单一 Lua 工作线程执行；`ui`、`web`、`app.exit` 等 UI 操作会自动切到主线程。耗时操作用 `http`（内部线程池）或 `file`（同步，限制 8MB）。
 
@@ -28,6 +28,7 @@ assets/lua/a/b/init.lua
 | `resume` | 无 | Activity `onResume` |
 | `destroy` | 无 | Activity 销毁前 |
 | `back` | 无 | 返回键。返回 `true` 表示已处理；否则交给 WebView 历史，最后退出 |
+| `newIntent` | `url` | 深链唤起（配置 `deepLinks`）。冷启动时会在 `create` 之后补发 |
 
 多个同事件处理器都会执行，按注册顺序。
 
@@ -56,7 +57,7 @@ end)
 
 | 方法 | 说明 |
 | --- | --- |
-| `web.load(url)` | 加载页面；origin 必须在白名单，否则被忽略 |
+| `web.load(url)` | 加载页面；origin 不在白名单、或 `http://` 未开启 cleartext 时直接报错 |
 | `web.reload()` | 重新加载 |
 | `web.goBack()` | WebView 后退 |
 | `web.canGoBack()` | 返回 boolean |
@@ -122,23 +123,51 @@ end)
 | `body` | string | 响应文本，最大 8MB |
 | `error` | string | 仅失败时存在 |
 
-连接/读取超时 15 秒，自动跟随重定向，User-Agent 为 `berba`。明文 HTTP 需要 manifest 允许 cleartext。
+连接/读取超时 15 秒，User-Agent 为 `berba`。重定向最多 5 跳，每一跳都重新校验协议与主机；默认拒绝本机、私网、链路本地与 CGNAT 地址，需要时在 `app.json` 设置 `"http": { "allowPrivateNetwork": true }`。明文 HTTP 需要 `"cleartext": true`。
+
+### `http.request(opts)`
+
+完整形态，`opts` 为表，返回请求 ID（字符串）：
+
+```lua
+local id = http.request({
+  url = "https://example.com/api/items",
+  method = "PUT",                       -- GET/POST/PUT/DELETE/HEAD/OPTIONS，默认 GET
+  headers = { ["X-Token"] = "abc" },     -- 可选
+  body = { items = { 1, 2 } },           -- 字符串或表（表编码为 JSON），可选
+  timeout = 30,                          -- 秒，1-120，默认 15
+  cb = function(res) log(res.status, res.body) end,
+  onProgress = function(read, total)      -- 可选；total 为 Content-Length，未知为 -1
+    if total > 0 then log(read * 100 // total .. "%") end
+  end,
+})
+http.cancel(id)   -- 断开连接；回调收到 { ok=false, status=0, error="已取消" }
+```
+
+结果表在 `http.get/post` 的基础上额外提供 `headers`（响应头表，同名多值以 `, ` 连接）。`http.cancel(id)` 只对仍在途的请求返回 `true`。
 
 ## file
 
-路径必须相对应用私有目录 `filesDir`，绝对路径、`..` 越界、NUL 都会被拒绝（反斜杠会统一转换为 `/`）；单文件上限 8MB。
+路径必须相对应用私有目录 `filesDir`，绝对路径、`..` 越界、NUL 都会被拒绝（反斜杠会统一转换为 `/`）；读写单文件上限均为 8MB。`file.write` 先写入同目录临时文件再替换，避免中途失败留下半个文件。
 
 | 方法 | 返回 |
 | --- | --- |
 | `file.read(path)` | 内容字符串；失败返回 `nil, 错误信息` |
 | `file.write(path, text)` | `true`；失败返回 `nil, 错误信息`（自动创建父目录） |
+| `file.append(path, text)` | `true`；追加写入并检查 8MB 上限 |
 | `file.exists(path)` | boolean；非法路径返回 `false` |
+| `file.delete(path)` | 删除文件/空目录；不存在返回 `false`，失败返回 `nil, 错误信息` |
+| `file.rename(from, to)` | `true`；目标已存在时覆盖，父目录自动创建 |
+| `file.stat(path)` | `{ size, mtime, dir, file }`（mtime 为秒级时间戳）；不存在返回 `nil, 错误信息` |
 | `file.list(dir)` | 排序后的文件名数组；失败返回 `nil, 错误信息` |
 
 ```lua
 file.write("notes/a.txt", "hello")
+file.append("notes/a.txt", "\nworld")
 local text = file.read("notes/a.txt")
+local info = file.stat("notes/a.txt")   -- info.size, info.mtime
 local names = file.list("notes")
+file.rename("notes/a.txt", "notes/b.txt")
 ```
 
 ## store
@@ -149,6 +178,8 @@ local names = file.list("notes")
 store.set("token", { value = "abc", exp = 1730000000 })
 local t = store.get("token")   -- 表；不存在返回 nil
 store.set("token", nil)        -- 删除
+local existed = store.remove("token")  -- 删除并返回原本是否存在
+local keys = store.keys()              -- 排序后的 key 数组
 ```
 
 key 不能为空且长度 ≤ 256。
@@ -179,7 +210,8 @@ end)
 
 | 方法 | 说明 |
 | --- | --- |
-| `ui.toast(msg)` | 短提示 |
+| `ui.toast(msg, duration)` | 提示；`duration` 为 `"short"`（默认）/`"long"`，或毫秒数（≥ 2000 视为长提示） |
+| `ui.statusBar({ color, light })` | 设置状态栏颜色（`"#rrggbb"`、`"#aarrggbb"` 或整数）与图标明暗（`light = true` 使用深色图标） |
 | `ui.alert(msg)` | 单按钮对话框 |
 | `ui.confirm(msg, cb)` | 确认对话框；`cb(true/false)` |
 | `ui.fullscreen(on)` | 隐藏/恢复状态栏与导航栏（沉浸式全屏） |
@@ -198,13 +230,18 @@ device.orientation("landscape")
 
 | 方法 | 返回 |
 | --- | --- |
-| `device.clipboard()` | 剪贴板文本 |
+| `device.clipboard()` / `device.clipboard(text)` | 无参读取剪贴板；传入字符串则写入并返回 `true` |
+| `device.vibrate(ms)` | 震动 1-10000 毫秒；需要 `VIBRATE` 权限，缺失时直接报错 |
+| `device.share(text)` / `device.share({ text, url })` | 打开系统分享面板 |
+| `device.openUrl(url)` | 用外部浏览器/应用打开 http(s) 链接 |
 | `device.orientation(mode)` | 运行时切换方向：`portrait` / `landscape` / `sensor` / `auto` |
 | `device.model()` | 设备型号 |
 | `device.sdk()` | API level |
 | `device.platform()` | `"android"` |
 | `device.locale()` | 例如 `zh_CN` |
 | `device.screen()` | `{ width, height, density, dpi }` |
+
+`device.openUrl` 只接受 `http/https`，不受 WebView 导航白名单限制；调用前请确认链接可信。
 
 ## json 与 log
 
@@ -231,7 +268,17 @@ window.berba.off('tick', onTick);
 
 - `berba.call(name, args)` 返回 Promise；Lua 抛错或方法不存在时 reject。
 - `berba.on(name, fn)` 订阅 Lua `bridge.emit` 的事件，返回该函数便于取消。
-- 每次启动生成随机 token，桥调用必须携带正确 token 且当前页面 origin 在白名单内。
+- 每次启动生成随机 token，只存在于 shim 闭包中（`window.berba.token` 不存在）；桥调用必须携带正确 token，且原生侧记录的当前页面 origin 在白名单内。
+- origin 由原生侧在导航开始时记录，页面不能通过伪造 `location.origin` 绕过。
 - 只有本地页面与 `allowedOrigins` 中的远程页面可以调用桥；未授权调用会被静默拒绝，Promise 不会完成。
 
-shim 的注入方式：本地 HTML 响应会在 `<head>` 前插入脚本标签（`https://appassets.androidhost/__berba.js`）；所有白名单页面在 `onPageStarted` 时还会再注入一次内联脚本。页面无需手动引入 shim，也无法通过其他 origin 获得可用 token。
+shim 的注入方式：本地 HTML 响应会在 `<head>` 前插入脚本标签（`https://appassets.androidhost/__berba.js`）；所有白名单页面在 `onPageStarted` 时还会再注入一次内联脚本。页面无需手动引入 shim。
+
+## 网页端可用能力
+
+- `<input type="file">` 调用系统文件选择器（SAF），支持单选与 `multiple` 多选。
+- 触发下载（如 `<a download>` 或响应带 `Content-Disposition`）时交由外部浏览器处理；`blob:` 链接不会被外部打开。
+- `alert` / `confirm` / `prompt` 使用原生对话框；`console.*` 写入 Logcat（tag `berba`，前缀 `[js]`）。
+- 多窗口禁用：`window.open` 与 `target="_blank"` 不会打开新页面；跳转请用 `web.load`（Lua 侧）或同页导航。
+- `getUserMedia` 与 `navigator.geolocation` 不可依赖；需要相机/定位请走 Lua `permission` + 自有实现。
+- 浏览器调试：`berba dev` 提供本地静态服务器并用 `dev/mock.js` 模拟桥，见 [build.md](build.md)。

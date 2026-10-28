@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
+
+	"berba/internal/clierr"
 )
 
 var (
@@ -21,9 +24,12 @@ const usageText = `berba - 把前端页面和 Lua 逻辑打包成 Android APK
 命令:
   init [目录]        创建项目脚手架（默认当前目录）
   build [目录]       构建 APK（默认当前目录，需要 app.json）
+  dev [目录]         本地静态服务器 + 桥 mock（浏览器调试）
+  watch [目录]       监听变更并自动重建（可配合 --install）
   keygen             生成签名密钥（缺失时 build 会自动生成）
   doctor             检查工具链与 payload 是否完整
   install [apk]      使用 adb 安装 APK（默认 dist/ 下的 APK）
+  release            打包已准备好的发行目录（生成 zip 与 SHA-256）
   version            显示版本
 
 全局参数:
@@ -31,8 +37,9 @@ const usageText = `berba - 把前端页面和 Lua 逻辑打包成 Android APK
 
 示例:
   berba init myapp --package com.example.myapp
-  cd myapp && berba build
-  berba install
+  cd myapp && berba dev --open
+  berba build && berba install
+  berba watch --install
 `
 
 func Run(args []string, version string) int {
@@ -46,12 +53,18 @@ func Run(args []string, version string) int {
 		err = runInit(args[1:])
 	case "build":
 		err = runBuild(args[1:])
+	case "dev":
+		err = runDev(args[1:])
+	case "watch":
+		err = runWatch(args[1:])
 	case "keygen":
 		err = runKeygen(args[1:])
 	case "doctor":
 		err = runDoctor(args[1:])
 	case "install":
 		err = runInstall(args[1:])
+	case "release":
+		err = runRelease(args[1:], version)
 	case "version", "--version", "-v":
 		fmt.Fprintf(out, "berba %s\n", version)
 		return 0
@@ -68,9 +81,20 @@ func Run(args []string, version string) int {
 			return 0
 		}
 		fmt.Fprintf(errOut, "错误: %v\n", err)
-		return 1
+		return clierr.ExitCode(err)
 	}
 	return 0
+}
+
+// configPathFor 把目录或文件参数解析为 app.json 路径。
+func configPathFor(target string) string {
+	if target == "" {
+		target = "app.json"
+	}
+	if st, err := os.Stat(target); err == nil && st.IsDir() {
+		return filepath.Join(target, "app.json")
+	}
+	return target
 }
 
 func newFlagSet(name, summary string) *flag.FlagSet {

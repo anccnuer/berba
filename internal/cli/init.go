@@ -3,9 +3,11 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"html"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"berba/internal/config"
 	"berba/templates"
@@ -41,6 +43,10 @@ func runInit(args []string) error {
 		return err
 	}
 
+	indexPath := filepath.Join(abs, "www", "index.html")
+	_, indexErr := os.Stat(indexPath)
+	indexExisted := indexErr == nil
+
 	root := templates.Init()
 	err = fs.WalkDir(root, ".", func(p string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -71,6 +77,11 @@ func runInit(args []string) error {
 			return err
 		}
 	}
+	if *name != "" && !indexExisted {
+		if err := rewriteIndexHTML(indexPath, *name); err != nil {
+			return err
+		}
+	}
 
 	fmt.Fprintf(out, "已创建项目: %s\n\n下一步:\n  cd %s\n  berba build\n", abs, relPath(".", abs))
 	return nil
@@ -96,6 +107,20 @@ func rewriteAppJSON(path, name, pkg string) error {
 		return err
 	}
 	return os.WriteFile(path, append(out, '\n'), 0o644)
+}
+
+func rewriteIndexHTML(path, name string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	escaped := html.EscapeString(name)
+	updated := strings.ReplaceAll(string(data), "<title>示例应用</title>", "<title>"+escaped+"</title>")
+	updated = strings.ReplaceAll(updated, "<h1>Hello berba</h1>", "<h1>"+escaped+"</h1>")
+	if updated == string(data) {
+		return nil
+	}
+	return os.WriteFile(path, []byte(updated), 0o644)
 }
 
 func relPath(base, target string) string {

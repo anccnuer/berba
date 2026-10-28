@@ -45,8 +45,31 @@ func TestSignAndVerify(t *testing.T) {
 	}
 
 	// The signing block must not alter the original bytes before it.
-	if !bytes.Equal(signed[:len(unsigned)-22], signed[:len(unsigned)-22]) {
-		t.Fatal("sanity")
+	unsignedEOCD, err := findEOCD(unsigned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(signed[:unsignedEOCD.cdOffset], unsigned[:unsignedEOCD.cdOffset]) {
+		t.Fatal("signing altered content before the central directory")
+	}
+}
+
+func TestMultiSignerVerify(t *testing.T) {
+	dir := t.TempDir()
+	k1, err := Generate(filepath.Join(dir, "k1.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	k2, err := Generate(filepath.Join(dir, "k2.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	signed, err := signWithKeys(testAPK(t), []*Key{k1, k2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Verify(signed); err != nil {
+		t.Fatalf("multi-signer verification failed: %v", err)
 	}
 }
 
@@ -116,5 +139,54 @@ func TestLoadKey(t *testing.T) {
 	}
 	if loaded.Private.N.Cmp(key.Private.N) != 0 {
 		t.Fatal("key mismatch")
+	}
+}
+
+func TestLoadOrCreateStable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "keys", "release.pem")
+	first, created, err := LoadOrCreate(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !created {
+		t.Fatal("first call should create the key")
+	}
+	second, created, err := LoadOrCreate(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created {
+		t.Fatal("second call must not create a new key")
+	}
+	if first.Fingerprint() != second.Fingerprint() {
+		t.Fatal("identity changed between loads")
+	}
+}
+
+func TestLoadOrCreateConcurrent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "keys", "release.pem")
+	const workers = 4
+	type outcome struct {
+		key *Key
+		err error
+	}
+	results := make(chan outcome, workers)
+	for i := 0; i < workers; i++ {
+		go func() {
+			k, _, err := LoadOrCreate(path)
+			results <- outcome{key: k, err: err}
+		}()
+	}
+	var fingerprint string
+	for i := 0; i < workers; i++ {
+		res := <-results
+		if res.err != nil {
+			t.Fatalf("LoadOrCreate failed: %v", res.err)
+		}
+		if fingerprint == "" {
+			fingerprint = res.key.Fingerprint()
+		} else if res.key.Fingerprint() != fingerprint {
+			t.Fatal("concurrent callers observed different identities")
+		}
 	}
 }

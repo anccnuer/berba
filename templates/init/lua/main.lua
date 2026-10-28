@@ -6,9 +6,9 @@ web.on("pageFinished", function(url)
   log("page finished: " .. tostring(url))
 end)
 
-bridge.register("getToken", function(req)
+bridge.register("hello", function(req)
   return {
-    token = "demo-token",
+    message = "hello from lua",
     sdk = device.sdk(),
     model = device.model()
   }

@@ -1,6 +1,8 @@
 package aapt2
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -8,7 +10,10 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"time"
 )
+
+const commandTimeout = 120 * time.Second
 
 type Tool struct {
 	Aapt2      string
@@ -39,13 +44,12 @@ func Locate(toolsDir string) (*Tool, error) {
 	return t, nil
 }
 
-func (t *Tool) Version() (string, error) {
-	cmd := exec.Command(t.Aapt2, "version")
-	out, err := cmd.CombinedOutput()
+func (t *Tool) Version(ctx context.Context) (string, error) {
+	out, err := t.run(ctx, "version")
 	if err != nil {
-		return "", fmt.Errorf("aapt2 无法执行: %s", strings.TrimSpace(string(out)))
+		return "", fmt.Errorf("aapt2 无法执行: %v", err)
 	}
-	text := strings.TrimSpace(string(out))
+	text := strings.TrimSpace(out)
 	if text == "" {
 		text = "aapt2 可用"
 	}
@@ -53,8 +57,8 @@ func (t *Tool) Version() (string, error) {
 }
 
 // Compile 把 res 目录编译为 compiled.zip。
-func (t *Tool) Compile(resDir, outZip string) error {
-	_, err := t.run("compile", "--dir", resDir, "-o", outZip)
+func (t *Tool) Compile(ctx context.Context, resDir, outZip string) error {
+	_, err := t.run(ctx, "compile", "--dir", resDir, "-o", outZip)
 	if err != nil {
 		return mapError("编译资源", err)
 	}
@@ -62,8 +66,8 @@ func (t *Tool) Compile(resDir, outZip string) error {
 }
 
 // Link 生成包含 Manifest 与资源的 base APK。
-func (t *Tool) Link(manifest, compiledZip, outAPK string) error {
-	_, err := t.run("link",
+func (t *Tool) Link(ctx context.Context, manifest, compiledZip, outAPK string) error {
+	_, err := t.run(ctx, "link",
 		"-o", outAPK,
 		"-I", t.AndroidJar,
 		"--manifest", manifest,
@@ -83,8 +87,8 @@ type Badging struct {
 	VersionName string
 }
 
-func (t *Tool) DumpBadging(apk string) (*Badging, error) {
-	out, err := t.run("dump", "badging", apk)
+func (t *Tool) DumpBadging(ctx context.Context, apk string) (*Badging, error) {
+	out, err := t.run(ctx, "dump", "badging", apk)
 	if err != nil {
 		return nil, mapError("读取 APK 信息", err)
 	}
@@ -95,31 +99,69 @@ func (t *Tool) DumpBadging(apk string) (*Badging, error) {
 	return &Badging{Package: m[1], VersionCode: m[2], VersionName: m[3]}, nil
 }
 
-func (t *Tool) run(args ...string) (string, error) {
-	cmd := exec.Command(t.Aapt2, args...)
+type runError struct {
+	code   int
+	stderr string
+	err    error
+}
+
+func (e *runError) Error() string {
+	if e.stderr != "" {
+		return e.stderr
+	}
+	return e.err.Error()
+}
+
+func (e *runError) Unwrap() error {
+	return e.err
+}
+
+func (t *Tool) run(ctx context.Context, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, t.Aapt2, args...)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return "", fmt.Errorf("aapt2 执行超时（%s）", commandTimeout)
+		}
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return "", ctx.Err()
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", ctxErr
+		}
 		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {
 			msg = err.Error()
 		}
-		return "", fmt.Errorf("%s", msg)
+		code := -1
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			code = exitErr.ExitCode()
+		}
+		return "", &runError{code: code, stderr: msg, err: err}
 	}
 	return string(out), nil
 }
 
 func mapError(action string, err error) error {
-	msg := err.Error()
-	switch {
-	case strings.Contains(msg, "AndroidManifest.xml:") && strings.Contains(msg, "error"):
-		return fmt.Errorf("%s失败，Manifest 有误: %s", action, msg)
-	case strings.Contains(msg, "not a valid PNG"), strings.Contains(msg, "failed to decode"):
-		return fmt.Errorf("%s失败，图标文件损坏: %s", action, msg)
-	case strings.Contains(msg, "Invalid file name"), strings.Contains(msg, "invalid file path"):
-		return fmt.Errorf("%s失败，资源文件名不合法: %s", action, msg)
-	default:
-		return fmt.Errorf("%s失败: %s", action, msg)
+	var re *runError
+	if errors.As(err, &re) {
+		first := re.stderr
+		if i := strings.IndexByte(first, '\n'); i >= 0 {
+			first = first[:i]
+		}
+		switch {
+		case strings.Contains(first, "AndroidManifest.xml"), strings.Contains(first, "Android resource linking failed"):
+			return fmt.Errorf("%s失败，Manifest 或资源有误: %s", action, re.stderr)
+		case strings.Contains(first, "not a valid PNG"), strings.Contains(first, "failed to decode"):
+			return fmt.Errorf("%s失败，图标文件损坏: %s", action, re.stderr)
+		case strings.Contains(first, "Invalid file name"), strings.Contains(first, "invalid file path"):
+			return fmt.Errorf("%s失败，资源文件名不合法: %s", action, re.stderr)
+		}
 	}
+	return fmt.Errorf("%s失败: %v", action, err)
 }

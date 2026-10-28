@@ -17,5 +17,8 @@
     "dir": "lua",
     "entry": "main.lua"
   },
+  "http": {
+    "allowPrivateNetwork": false
+  },
   "debug": false
 }

@@ -98,6 +98,44 @@ func TestBuildRejectsTraversal(t *testing.T) {
 	if _, err := Build([]Entry{{Name: "/abs", Data: []byte("x")}}); err == nil {
 		t.Fatal("expected absolute path rejection")
 	}
+	if _, err := Build([]Entry{{Name: "a/../b", Data: []byte("x")}}); err == nil {
+		t.Fatal("expected dot-segment rejection")
+	}
+}
+
+func TestBuildAllowsDoubleDotInFileName(t *testing.T) {
+	const name = "assets/www/foo..bar.js"
+	data, err := Build([]Entry{{Name: name, Data: []byte("console.log(1)")}})
+	if err != nil {
+		t.Fatalf("valid file name rejected: %v", err)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(zr.File) != 1 || zr.File[0].Name != name {
+		t.Fatalf("unexpected entries: %+v", zr.File)
+	}
+}
+
+func TestBuildOrderIndependent(t *testing.T) {
+	entries := []Entry{
+		{Name: "assets/www/index.html", Data: []byte("<html>hi</html>")},
+		{Name: "classes.dex", Data: []byte("dex\n035\x00")},
+		{Name: "AndroidManifest.xml", Data: []byte("<manifest/>")},
+	}
+	reversed := []Entry{entries[2], entries[1], entries[0]}
+	a, err := Build(entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := Build(reversed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(a, b) {
+		t.Fatal("Build output depends on input order")
+	}
 }
 
 func inspectZip(t *testing.T, data []byte) map[string]entryInfo {

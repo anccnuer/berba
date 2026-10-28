@@ -1,12 +1,15 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -17,6 +20,63 @@ const (
 )
 
 var packageRE = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$`)
+var deepLinkSchemeRE = regexp.MustCompile(`^[a-z][a-z0-9+.\-]{1,31}$`)
+
+// DeepLink 是一条自定义 scheme 深链（Manifest intent-filter 用 scheme+host 匹配）。
+type DeepLink struct {
+	Scheme string
+	Host   string
+}
+
+// parseDeepLinks 校验并去重深链，按 scheme+host 排序保证 Manifest 确定性。
+func parseDeepLinks(raw []string) ([]DeepLink, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	if len(raw) > 16 {
+		return nil, fmt.Errorf("deepLinks 最多 16 条")
+	}
+	seen := map[string]bool{}
+	var links []DeepLink
+	for _, item := range raw {
+		s := strings.TrimSpace(item)
+		if s == "" {
+			return nil, fmt.Errorf("deepLinks 不能包含空字符串")
+		}
+		u, err := url.Parse(s)
+		if err != nil {
+			return nil, fmt.Errorf("deepLinks 不合法: %q", item)
+		}
+		scheme := strings.ToLower(u.Scheme)
+		if scheme == "" {
+			return nil, fmt.Errorf("deepLinks 必须带 scheme: %q", item)
+		}
+		switch scheme {
+		case "http", "https", "file", "content", "data":
+			return nil, fmt.Errorf("deepLinks 不支持 %s: 协议", scheme)
+		}
+		if !deepLinkSchemeRE.MatchString(scheme) {
+			return nil, fmt.Errorf("deepLinks scheme 不合法: %q", item)
+		}
+		host := strings.ToLower(u.Host)
+		if strings.ContainsAny(host, " \t\n\"'<>") {
+			return nil, fmt.Errorf("deepLinks host 不合法: %q", item)
+		}
+		key := scheme + "|" + host
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		links = append(links, DeepLink{Scheme: scheme, Host: host})
+	}
+	sort.Slice(links, func(i, j int) bool {
+		if links[i].Scheme != links[j].Scheme {
+			return links[i].Scheme < links[j].Scheme
+		}
+		return links[i].Host < links[j].Host
+	})
+	return links, nil
+}
 
 type WebConfig struct {
 	Dir            string   `json:"dir"`
@@ -30,6 +90,10 @@ type LuaConfig struct {
 	Entry string `json:"entry"`
 }
 
+type HTTPConfig struct {
+	AllowPrivateNetwork bool `json:"allowPrivateNetwork"`
+}
+
 type Config struct {
 	Name        string            `json:"name"`
 	Package     string            `json:"package"`
@@ -40,9 +104,11 @@ type Config struct {
 	Theme       string            `json:"theme"`
 	Cleartext   bool              `json:"cleartext"`
 	Permissions []string          `json:"permissions"`
+	DeepLinks   []string          `json:"deepLinks"`
 	MetaData    map[string]string `json:"metaData"`
 	Web         WebConfig         `json:"web"`
 	Lua         LuaConfig         `json:"lua"`
+	HTTP        HTTPConfig        `json:"http"`
 	Debug       bool              `json:"debug"`
 }
 
@@ -51,6 +117,7 @@ type Project struct {
 	ConfigPath     string
 	Config         Config
 	Permissions    []string
+	DeepLinks      []DeepLink
 	IconPath       string
 	WebDir         string
 	LuaDir         string
@@ -58,6 +125,7 @@ type Project struct {
 	LocalStart     bool
 	StartURL       *url.URL
 	AllowedOrigins []string
+	Warnings       []string
 }
 
 func Load(path string) (*Project, error) {
@@ -83,7 +151,16 @@ func Load(path string) (*Project, error) {
 			Entry: "main.lua",
 		},
 	}
-	if err := json.Unmarshal(data, &cfg); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&cfg); err != nil {
+		return nil, fmt.Errorf("解析 app.json 失败: %w", err)
+	}
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("app.json 只能包含一个 JSON 对象")
+		}
 		return nil, fmt.Errorf("解析 app.json 失败: %w", err)
 	}
 
@@ -127,13 +204,17 @@ func (p *Project) finish() error {
 		return fmt.Errorf("theme 只能是 light / dark / device")
 	}
 
-	if cfg.Web.Dir == "" {
+	if strings.TrimSpace(cfg.Web.Dir) == "" {
 		cfg.Web.Dir = "www"
 	}
 	if cfg.Web.StartURL == "" {
 		cfg.Web.StartURL = DefaultStartURL
 	}
-	p.WebDir = resolve(p.Root, cfg.Web.Dir)
+	webDir, err := resolveWithin(p.Root, cfg.Web.Dir, "web.dir")
+	if err != nil {
+		return err
+	}
+	p.WebDir = webDir
 	info, err := os.Stat(p.WebDir)
 	if err != nil || !info.IsDir() {
 		return fmt.Errorf("web.dir 不存在或不是目录: %s", p.WebDir)
@@ -187,16 +268,31 @@ func (p *Project) finish() error {
 			origins = append(origins, o)
 		}
 	}
-	if p.LocalStart && !seen[LocalOrigin] {
-		seen[LocalOrigin] = true
-		origins = append(origins, LocalOrigin)
+	if p.LocalStart {
+		if !seen[LocalOrigin] {
+			seen[LocalOrigin] = true
+			origins = append(origins, LocalOrigin)
+		}
+	} else if origin := OriginOf(start); origin != "" && !seen[origin] {
+		seen[origin] = true
+		origins = append(origins, origin)
 	}
 	p.AllowedOrigins = origins
 
-	if cfg.Lua.Dir == "" {
+	links, err := parseDeepLinks(cfg.DeepLinks)
+	if err != nil {
+		return err
+	}
+	p.DeepLinks = links
+
+	luaDirSet := strings.TrimSpace(cfg.Lua.Dir) != ""
+	if !luaDirSet {
 		cfg.Lua.Dir = "lua"
 	}
-	p.LuaDir = resolve(p.Root, cfg.Lua.Dir)
+	p.LuaDir, err = resolveWithin(p.Root, cfg.Lua.Dir, "lua.dir")
+	if err != nil {
+		return err
+	}
 	if info, err := os.Stat(p.LuaDir); err == nil && info.IsDir() {
 		entry := cfg.Lua.Entry
 		if entry == "" {
@@ -210,10 +306,15 @@ func (p *Project) finish() error {
 			return fmt.Errorf("Lua 入口文件不存在: %s", entryPath)
 		}
 		p.HasLua = true
+	} else if luaDirSet {
+		p.Warnings = append(p.Warnings, fmt.Sprintf("lua.dir 不存在或不是目录，Lua 已禁用: %s", p.LuaDir))
 	}
 
 	if cfg.Icon != "" {
-		p.IconPath = resolve(p.Root, cfg.Icon)
+		p.IconPath, err = resolveWithin(p.Root, cfg.Icon, "icon")
+		if err != nil {
+			return err
+		}
 		st, err := os.Stat(p.IconPath)
 		if err != nil || st.IsDir() {
 			return fmt.Errorf("icon 不存在或不是文件: %s", p.IconPath)
@@ -258,11 +359,21 @@ func ValidatePackage(pkg string) error {
 	return nil
 }
 
-func resolve(root, path string) string {
-	if filepath.IsAbs(path) {
-		return filepath.Clean(path)
+func resolveWithin(root, path, field string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", fmt.Errorf("%s 不能为空", field)
 	}
-	return filepath.Clean(filepath.Join(root, filepath.FromSlash(path)))
+	var p string
+	if filepath.IsAbs(path) {
+		p = filepath.Clean(path)
+	} else {
+		p = filepath.Clean(filepath.Join(root, filepath.FromSlash(path)))
+	}
+	if !within(root, p) {
+		return "", fmt.Errorf("%s 必须位于项目目录内: %q", field, path)
+	}
+	return p, nil
 }
 
 func within(root, child string) bool {
@@ -332,6 +443,8 @@ var permissionAliases = map[string]string{
 	"SYSTEM_ALERT_WINDOW":        "android.permission.SYSTEM_ALERT_WINDOW",
 }
 
+var permissionNameRE = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
+
 func NormalizePermission(raw string) (string, error) {
 	s := strings.TrimSpace(raw)
 	if s == "" {
@@ -339,7 +452,7 @@ func NormalizePermission(raw string) (string, error) {
 	}
 	if strings.HasPrefix(s, "android.permission.") {
 		name := strings.TrimPrefix(s, "android.permission.")
-		if !regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`).MatchString(name) {
+		if !permissionNameRE.MatchString(name) {
 			return "", fmt.Errorf("权限名不合法: %q", raw)
 		}
 		return s, nil

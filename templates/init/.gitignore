@@ -1,2 +1,9 @@
 .berba/
 dist/
+*.apk
+*.pem
+*.sha256
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

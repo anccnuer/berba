@@ -69,61 +69,10 @@ Write-Host "==> 编译 shell payload"
 & (Join-Path $PSScriptRoot "build-shell.ps1") -Out (Join-Path $Stage "payload") -Sdk $Sdk -Platform $Platform -BuildTools $BuildTools -Luaj $Luaj
 if ($LASTEXITCODE -ne 0) { Die "build-shell 失败" }
 
-Write-Host "==> 写入 versions.json"
-$prevEap = $ErrorActionPreference
-$ErrorActionPreference = "Continue"
-$aapt2Version = (& $Aapt2 version 2>&1 | Out-String).Trim()
-$ErrorActionPreference = $prevEap
-if (-not $aapt2Version) { Die "无法获取 aapt2 版本" }
-$aapt2Version = ($aapt2Version -split "`r?`n")[0].Trim()
-$aapt2Version = $aapt2Version -replace '^.* : ', ''
-$versions = [ordered]@{
-    version    = $Version
-    aapt2      = [ordered]@{
-        version = $aapt2Version
-        sha256  = (Get-FileHash -LiteralPath (Join-Path $Stage "tools\aapt2.exe") -Algorithm SHA256).Hash.ToLowerInvariant()
-    }
-    androidJar = [ordered]@{
-        version = $Platform
-        sha256  = (Get-FileHash -LiteralPath (Join-Path $Stage "tools\android.jar") -Algorithm SHA256).Hash.ToLowerInvariant()
-    }
-}
-$json = $versions | ConvertTo-Json -Depth 5
-[IO.File]::WriteAllText((Join-Path $Stage "tools\versions.json"), $json + "`n", [Text.UTF8Encoding]::new($false))
-
-Write-Host "==> 复制文档"
-foreach ($item in @("NOTICE", "README.md")) {
-    $path = Join-Path $Root $item
-    if (Test-Path -LiteralPath $path) { Copy-Item -LiteralPath $path -Destination $Stage }
-}
-$docs = Join-Path $Root "docs"
-if (Test-Path -LiteralPath $docs) {
-    Copy-Item -LiteralPath $docs -Destination $Stage -Recurse
-}
-
-Write-Host "==> 生成 zip"
+Write-Host "==> 生成发行包（versions.json + 文档 + zip）"
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
-if (Test-Path -LiteralPath $Zip) { Remove-Item -LiteralPath $Zip -Force }
-# 不用 Compress-Archive：Windows PowerShell 5.1 会写入反斜杠路径，跨平台解压失败。
-Add-Type -AssemblyName System.IO.Compression
-Add-Type -AssemblyName System.IO.Compression.FileSystem
-$zipStream = [IO.File]::Open($Zip, [IO.FileMode]::Create)
-try {
-    $archive = New-Object IO.Compression.ZipArchive($zipStream, [IO.Compression.ZipArchiveMode]::Create)
-    try {
-        $prefixLen = $Stage.TrimEnd('\').Length + 1
-        Get-ChildItem -LiteralPath $Stage -Recurse -File | Sort-Object FullName | ForEach-Object {
-            $rel = $_.FullName.Substring($prefixLen).Replace('\', '/')
-            $entry = $archive.CreateEntry($rel, [IO.Compression.CompressionLevel]::Optimal)
-            $entry.LastWriteTime = $_.LastWriteTime
-            $input = [IO.File]::OpenRead($_.FullName)
-            try {
-                $output = $entry.Open()
-                try { $input.CopyTo($output) } finally { $output.Dispose() }
-            } finally { $input.Dispose() }
-        }
-    } finally { $archive.Dispose() }
-} finally { $zipStream.Dispose() }
+& (Join-Path $Stage "berba.exe") release --home $Stage --out $OutDir --version $Version --platform $Platform --docs $Root
+if ($LASTEXITCODE -ne 0) { Die "berba release 失败 (exit $LASTEXITCODE)" }
 
 $zipHash = (Get-FileHash -LiteralPath $Zip -Algorithm SHA256).Hash.ToLowerInvariant()
 $sizeMB = [math]::Round((Get-Item -LiteralPath $Zip).Length / 1MB, 1)

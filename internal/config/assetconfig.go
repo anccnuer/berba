@@ -3,17 +3,18 @@ package config
 import "encoding/json"
 
 type AssetConfig struct {
-	Name           string   `json:"name"`
-	Package        string   `json:"package"`
-	VersionName    string   `json:"versionName"`
-	VersionCode    int      `json:"versionCode"`
-	StartURL       string   `json:"startUrl"`
-	SPA            bool     `json:"spa"`
-	AllowedOrigins []string `json:"allowedOrigins"`
-	LuaEntry       string   `json:"luaEntry,omitempty"`
-	Cleartext      bool     `json:"cleartext"`
-	Debug          bool     `json:"debug"`
-	Theme          string   `json:"theme"`
+	Name           string     `json:"name"`
+	Package        string     `json:"package"`
+	VersionName    string     `json:"versionName"`
+	VersionCode    int        `json:"versionCode"`
+	StartURL       string     `json:"startUrl"`
+	SPA            bool       `json:"spa"`
+	AllowedOrigins []string   `json:"allowedOrigins"`
+	LuaEntry       string     `json:"luaEntry,omitempty"`
+	Cleartext      bool       `json:"cleartext"`
+	HTTP           HTTPConfig `json:"http"`
+	Debug          bool       `json:"debug"`
+	Theme          string     `json:"theme"`
 }
 
 // AssetConfig 生成写入 assets/app_config.json 的运行时配置。
@@ -27,6 +28,7 @@ func (p *Project) AssetConfig(debug bool) ([]byte, error) {
 		SPA:            p.Config.Web.SPA,
 		AllowedOrigins: p.AllowedOrigins,
 		Cleartext:      p.Config.Cleartext,
+		HTTP:           p.Config.HTTP,
 		Debug:          debug || p.Config.Debug,
 		Theme:          p.Config.Theme,
 	}

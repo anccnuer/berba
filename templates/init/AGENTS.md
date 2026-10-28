@@ -9,7 +9,7 @@
 | 项 | 值 |
 | --- | --- |
 | 构建 | `berba build` → `dist/<package>-<versionName>.apk` + `.sha256` |
-| 自检 | `berba doctor`（工具链完整性） |
+| 自检 | `berba doctor`（工具链与 payload 完整性，含 aapt2/android.jar/dex 哈希） |
 | 安装 | `berba install`（需要 adb，失败不影响构建） |
 | 入口页面 | `app.json` 的 `web.startUrl`，默认 `https://appassets.androidhost/index.html` |
 | 入口脚本 | `app.json` 的 `lua.entry`，默认 `main.lua`（位于 `lua/`） |
@@ -42,21 +42,22 @@ AGENTS.md         本文件
 - 本地页面（`https://appassets.androidhost/*` → `assets/www/*`）或远程页面（需 `allowedOrigins`）。
 - Lua 5.2（LuaJ 3.0.1）胶水逻辑：事件、定时/异步回调（无 sleep）、JSON、HTTP(S)、本地键值存储与私有文件。
 - JS ↔ Lua 双向调用：`window.berba.call` / `bridge.register`，`bridge.emit` / `window.berba.on`。
-- 运行时权限申请；Toast/对话框；沉浸式全屏；屏幕常亮；运行时切换屏幕方向；读取剪贴板与设备信息。
+- 运行时权限申请；Toast/对话框；沉浸式全屏；屏幕常亮；运行时切换屏幕方向；状态栏颜色；读写剪贴板；震动；系统分享；外部浏览器打开 http(s) 链接。
+- 私有文件读写/追加/重命名/删除/stat，键值存储（含 `store.keys`）；读取设备信息。
 - 配置应用名、包名、版本、图标、主题（light/dark/device）、屏幕方向、cleartext、meta-data。
 
 ### 3.2 不能做（不要尝试，也不要向用户承诺）
 
 - **没有任意 Java/Android API**：Lua 无 `luajava`，不能反射、不能调用未封装的系统能力；不支持原生插件、`.so`、JNI。
-- **Lua 库受限**：只有 `base`、`table`、`string`、`math`、`coroutine`、`bit32`；没有 `io`、`os`、`package`、`debug`、`utf8`、`dofile`、`loadfile`。Lua 是 5.2 语义：没有 `//`、位运算运算符、`utf8` 库。
+- **Lua 库受限**：只有 `base`、`table`、`string`、`math`、`coroutine`、`bit32`；没有 `io`、`os`、`package`、`debug`、`utf8`、`load`、`dofile`、`loadfile`。Lua 是 5.2 语义：没有 `//`、位运算运算符、`utf8` 库。
 - **无后台能力**：没有 Service、推送、定时唤醒、开机自启、通知发送。
-- **无系统集成**：文件选择器（`<input type="file">` 无响应）、下载（无 DownloadListener）、分享、打开外部应用、新窗口/`target="_blank"`、`window.open`（多窗口已禁用）。
-- **网页媒体/定位不可用**：壳未配置 `WebChromeClient`，`getUserMedia`（相机/麦克风）、`navigator.geolocation` 不可依赖。`permission.request` 只授予 Manifest 权限，不等于网页 API 可用。剪贴板只能读（`device.clipboard()`），不能写。
-- **JS 原生对话框不弹出**：`alert`/`confirm`/`prompt` 无效果；改用 `ui.alert`、`ui.confirm` 或页面内 DOM 弹层。
+- **系统集成有限**：`<input type="file">` 走系统文件选择器（SAF），下载/`device.share`/`device.openUrl` 交由系统处理；无自定义 Provider、无通知、无后台服务。新窗口/`target="_blank"`、`window.open` 仍被禁用（多窗口已关闭）。
+- **网页媒体/定位不可用**：壳未实现 `getUserMedia`（相机/麦克风）与 `navigator.geolocation` 授权，二者不可依赖。`permission.request` 只授予 Manifest 权限，不等于网页 API 可用。剪贴板读写使用 `device.clipboard()` / `device.clipboard(text)`。
+- **网页对话框可用但会阻塞页面**：`alert`/`confirm`/`prompt` 映射为原生对话框；`console.*` 写入 Logcat（`adb logcat -s berba`，前缀 `[js]`）。交互复杂时优先用 `ui.*` 或 DOM 弹层。
 - **无多 Activity、无自定义 Manifest/资源/主题**：主题只能是 `light`/`dark`/`device` 映射的框架主题。
 - **无 AAB/Google Play、无热更新、无 v1 签名、无 iOS**。
 - **明文网络默认禁止**：只有 `"cleartext": true` 才允许 `http://`；混合内容永远禁止。
-- **远程页面受限**：启动页为远程 URL 时，其 origin 必须写入 `web.allowedOrigins`，否则导航与 JS 桥都会被拒绝；只有白名单页面能拿到可用的桥 token。
+- **远程页面受限**：启动页自身的 origin 会自动加入白名单；页面访问其他远程 origin 时必须写入 `web.allowedOrigins`，否则导航与 JS 桥都会被拒绝。只有白名单页面能使用桥。
 - **不要硬编码密钥/令牌**：`www/` 与 `lua/` 会原样进入 APK，可被解包读取。
 
 ## 4. app.json
@@ -80,6 +81,7 @@ AGENTS.md         本文件
     "allowedOrigins": []
   },
   "lua": { "dir": "lua", "entry": "main.lua" },
+  "http": { "allowPrivateNetwork": false },
   "debug": false
 }
 ```
@@ -94,13 +96,15 @@ AGENTS.md         本文件
 | `orientation` | `auto` / `portrait` / `landscape`（Manifest 初始方向） |
 | `theme` | `light` / `dark` / `device` |
 | `cleartext` | 是否允许明文 HTTP，默认 `false` |
+| `http.allowPrivateNetwork` | 允许 Lua `http` 访问本机/局域网，默认 `false` |
 | `permissions` | 权限别名或完整 `android.permission.X`；`INTERNET` 自动追加 |
 | `metaData` | `<application>` 下的 meta-data，键值均为字符串 |
+| `deepLinks` | 自定义 scheme 深链（如 `"myapp://open"`），生成 VIEW intent-filter；声明后 Activity 使用 `launchMode="singleTask"` |
 | `web.dir` | 前端目录，默认 `www` |
 | `web.startUrl` | 启动页面；本地页用 `https://appassets.androidhost/...` |
 | `web.spa` | 无扩展名的本地路径回退到 `index.html` |
 | `web.allowedOrigins` | 额外允许的 origin（协议+主机+可选端口，不能带路径） |
-| `lua.dir` / `lua.entry` | Lua 目录与入口；缺省目录/入口时应用仍可运行，但 `window.berba.call` 会返回“未注册的桥接方法” |
+| `lua.dir` / `lua.entry` | Lua 目录与入口；`lua.dir` 不存在时 Lua 被禁用（显式配置会告警），目录存在但入口缺失会构建失败 |
 | `debug` | WebView 远程调试 + `android:debuggable`；也可用 `berba build --debug` |
 
 常用权限别名（大小写不敏感，`-` 与 `_` 等价）：`INTERNET`、`ACCESS_NETWORK_STATE`、`CAMERA`、`RECORD_AUDIO`、`ACCESS_FINE_LOCATION`、`ACCESS_COARSE_LOCATION`、`ACCESS_BACKGROUND_LOCATION`、`READ_EXTERNAL_STORAGE`、`WRITE_EXTERNAL_STORAGE`、`READ_MEDIA_IMAGES`、`READ_MEDIA_VIDEO`、`READ_MEDIA_AUDIO`、`POST_NOTIFICATIONS`、`VIBRATE`、`WAKE_LOCK`、`BLUETOOTH`、`BLUETOOTH_CONNECT`、`NFC`、`CALL_PHONE`、`READ_CONTACTS`、`READ_CALENDAR`、`BODY_SENSORS`、`ACTIVITY_RECOGNITION`、`SYSTEM_ALERT_WINDOW`。未识别别名会构建失败，其他权限写完整名称。
@@ -111,8 +115,8 @@ shim 由壳自动注入（本地 HTML 自动插入 `<script src="https://appasse
 
 ```js
 // 调用 Lua 注册的方法，返回 Promise
-const res = await window.berba.call('getToken', { user: 'a' });
-console.log(res.token);
+const res = await window.berba.call('hello', { user: 'a' });
+console.log(res.message);
 
 // 订阅 Lua → JS 事件；on 返回传入的函数，可直接传给 off
 function onTick(data) { console.log(data.count); }
@@ -124,7 +128,7 @@ window.berba.off('tick', onTick);
 - Lua 抛错或方法未注册时 Promise reject，`err.message` 为错误文本。
 - Lua 返回 `nil` → resolve `null`；Lua 表按 JSON 规则转换。
 - 当前页面 origin 不在白名单时，调用被静默丢弃，**Promise 永远不会 settle**；不要依赖超时判断业务错误。
-- 页面不需要、也无法获取 token；token 随 shim 注入。
+- token 只存在于 shim 闭包，`window.berba.token` 不存在；origin 由原生侧按导航 URL 记录。安全边界是 origin 白名单，不要允许不可信页面。
 
 ## 6. Lua API
 
@@ -138,12 +142,13 @@ window.berba.off('tick', onTick);
 
 | API | 说明 |
 | --- | --- |
-| `app.on(event, fn)` | `create` / `pause` / `resume` / `destroy` / `back`；同事件多个处理器按注册顺序执行 |
+| `app.on(event, fn)` | `create` / `pause` / `resume` / `destroy` / `back` / `newIntent`；同事件多个处理器按注册顺序执行 |
 | `app.exit()` | 结束 Activity |
 | `app.info()` | 返回 `{name, package, versionName, versionCode, sdk, platform}` |
 
 - `create`：所有处理器执行完，若没有调用 `web.load`，自动加载 `startUrl`。
 - `back`：任一处理器返回 `true` 表示已处理；否则交给 WebView 历史，最后退出。
+- `newIntent(url)`：深链唤起（需在 `app.json` 配置 `deepLinks`）。冷启动时在 `create` 之后补发。内容不可信，使用前必须校验。
 
 ```lua
 app.on("back", function()
@@ -155,7 +160,7 @@ end)
 
 | API | 说明 |
 | --- | --- |
-| `web.load(url)` | 加载页面；origin 不在白名单则忽略 |
+| `web.load(url)` | 加载页面；origin 不在白名单或明文 HTTP 未开启时直接报错 |
 | `web.reload()` / `web.goBack()` | 重载 / 后退 |
 | `web.canGoBack()` | 返回 boolean |
 | `web.eval(script, cb)` | 执行 JS；`cb(rawJson)` 收到 `evaluateJavascript` 的原始 JSON 文本 |
@@ -186,9 +191,11 @@ bridge.emit("tick", { count = 3 })
 
 ### 6.5 http
 
-`http.get(url, callback)`、`http.post(url, body, callback)`。仅 `http/https`；异步；连接/读取超时 15 秒；自动跟随重定向；UA 为 `berba`；响应上限 8MB；`post` 的 `body` 为字符串或表（表编码为 JSON，`{`/`[` 开头按 `application/json` 发送，否则 `text/plain`）。
+`http.get(url, callback)`、`http.post(url, body, callback)`、`http.request(opts)`、`http.cancel(id)`。仅 `http/https`；异步；最多 5 跳重定向且逐跳校验；UA 为 `berba`；响应上限 8MB；默认拒绝本机/私网地址（需 `http.allowPrivateNetwork`）；`body` 为字符串或表（表编码为 JSON，`{`/`[` 开头按 `application/json` 发送，否则 `text/plain`）。
 
-回调结果：`{ ok = bool, status = int, body = string, error = string? }`；`ok` 表示 2xx，网络错误 `status = 0` 且带 `error`。明文 HTTP 需 `cleartext: true`。
+`http.request(opts)` 的 `opts`：`url`、`method`（GET/POST/PUT/DELETE/HEAD/OPTIONS，默认 GET）、`headers`、`body`、`timeout`（秒，1-120，默认 15）、`cb`（必填）、`onProgress(read, total)`（可选，total 未知为 -1）。返回请求 ID（字符串），`http.cancel(id)` 断开在途请求并触发 `cb({ ok=false, status=0, error="已取消" })`。
+
+回调结果：`{ ok = bool, status = int, body = string, headers = table, error = string? }`；`ok` 表示 2xx，网络错误 `status = 0` 且带 `error`。明文 HTTP 需 `cleartext: true`。
 
 ```lua
 http.get("https://example.com/api", function(res)
@@ -198,23 +205,28 @@ end)
 
 ### 6.6 file
 
-路径相对应用私有目录 `filesDir`；绝对路径、`..` 越界、NUL 被拒绝；反斜杠转为 `/`；单文件 ≤ 8MB。
+路径相对应用私有目录 `filesDir`；绝对路径、`..` 越界、NUL 被拒绝；反斜杠转为 `/`；读写单文件均 ≤ 8MB；`write` 先写临时文件再替换。
 
 | API | 返回 |
 | --- | --- |
 | `file.read(path)` | 文本；失败 `nil, err` |
 | `file.write(path, text)` | `true`；失败 `nil, err`；自动创建父目录 |
+| `file.append(path, text)` | `true`；追加，超过 8MB 报错 |
 | `file.exists(path)` | boolean（非法路径为 `false`） |
+| `file.delete(path)` | 删除；不存在 `false`，失败 `nil, err` |
+| `file.rename(from, to)` | `true`；覆盖目标并创建父目录 |
+| `file.stat(path)` | `{ size, mtime, dir, file }`；不存在 `nil, err` |
 | `file.list(dir)` | 排序后的名称数组；失败 `nil, err` |
 
 ```lua
 file.write("notes/a.txt", "hello")
+file.append("notes/a.txt", "\nworld")
 local text = file.read("notes/a.txt")
 ```
 
 ### 6.7 store
 
-`store.get(key)` / `store.set(key, value)`：SharedPreferences，值以 JSON 保存（字符串/数字/布尔/表）；`set(key, nil)` 删除；key 非空且 ≤ 256。
+`store.get(key)` / `store.set(key, value)` / `store.remove(key)` / `store.keys()`：SharedPreferences，值以 JSON 保存（字符串/数字/布尔/表）；`set(key, nil)` 删除；key 非空且 ≤ 256。`remove` 返回原本是否存在，`keys` 返回排序后的 key 数组。
 
 ### 6.8 permission
 
@@ -233,7 +245,8 @@ end)
 
 | API | 说明 |
 | --- | --- |
-| `ui.toast(msg)` | 短提示 |
+| `ui.toast(msg, duration)` | 提示；`"short"`（默认）/`"long"`/毫秒数 |
+| `ui.statusBar({ color, light })` | 状态栏颜色（`"#rrggbb"` 等）与图标明暗 |
 | `ui.alert(msg)` | 单按钮对话框 |
 | `ui.confirm(msg, cb)` | `cb(true/false)` |
 | `ui.fullscreen(on)` | 沉浸式全屏开关（`onResume` 自动恢复） |
@@ -243,7 +256,10 @@ end)
 
 | API | 返回 |
 | --- | --- |
-| `device.clipboard()` | 剪贴板文本（只读） |
+| `device.clipboard()` / `device.clipboard(text)` | 读取 / 写入剪贴板 |
+| `device.vibrate(ms)` | 震动 1-10000ms，需要 `VIBRATE` 权限 |
+| `device.share(text)` / `device.share({ text, url })` | 系统分享面板 |
+| `device.openUrl(url)` | 外部浏览器打开 http(s) 链接 |
 | `device.orientation(mode)` | 运行时切换：`portrait` / `landscape` / `sensor` / `auto` |
 | `device.model()` / `device.sdk()` / `device.platform()` | 型号 / API level / `"android"` |
 | `device.locale()` | 如 `zh_CN` |

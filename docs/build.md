@@ -26,10 +26,59 @@ dist/com.example.myapp-1.0.0.apk.sha256
 | --- | --- |
 | `--config <path>` | 指定 app.json |
 | `--out <dir>` | 输出目录（默认 `<项目>/dist`） |
-| `--debug` | 可调试构建（WebView 远程调试 + `android:debuggable="true"`） |
+| `--debug` | 可调试构建（WebView 远程调试 + `android:debuggable="true"`，产物名追加 `-debug`） |
 | `--home <dir>` | 发行包根目录（默认 exe 所在目录或 `BERBA_HOME`） |
+| `--key <path>` | 指定签名私钥；路径不存在时报错，仅默认路径会自动生成 |
 
-`berba install` 会优先使用 `--adb`、`BERBA_ADB`、PATH 中的 adb；找不到 adb 时只打印提示，不影响构建。
+`--home` 只影响 `tools/` 与 `payload/` 的查找，不改变项目目录或输出目录。构建先在临时文件中验签、badging 自检，通过后才原子替换 `dist/` 下的正式产物；失败不会留下半成品。
+
+`berba install` 接受位置参数或 `--apk <path>` 指定 APK，默认使用 `dist/` 下最新的 APK；设备可用 `--device <serial>` 指定。adb 查找顺序为 `--adb`、`BERBA_ADB`、PATH；找不到 adb 时只打印提示，不影响构建。
+
+## 本地开发（dev / watch）
+
+`berba dev` 用本地 HTTP 服务提供 `web.dir` 下的文件，无需构建 APK 即可在浏览器里调试页面：
+
+```bat
+berba dev --open
+```
+
+- 入口取自 `web.startUrl` 的路径，默认 `/index.html`；`web.spa` 为 true 时无扩展名路径回退到 `index.html`。
+- 所有 HTML 响应会在 `<head>` 后注入 `/__berba.js`，提供与壳一致的 `window.berba.call/on/off`。桥调用由 `dev/mock.js` 中的 `window.__berbaMock` 处理：
+
+  ```js
+  // dev/mock.js
+  window.__berbaMock = {
+    add: (req) => ({ sum: (req.a || 0) + (req.b || 0) }),
+    "device.model": () => "dev-browser",
+  };
+  window.__berbaEmit && window.__berbaEmit("tick", { at: Date.now() });
+  ```
+
+  未 mock 的方法会打印警告并 reject。mock 脚本不会进入 APK。
+- 参数：`--port`（默认 5173，0 表示随机）、`--host`、`--open`、`--mock <path>`（默认 `<项目>/dev/mock.js`）。
+
+`berba watch` 轮询项目文件（忽略 `.git`、`.berba`、`dist`、`node_modules` 等），稳定后自动重建：
+
+```bat
+berba watch --install
+```
+
+- 首次启动立即构建一次；构建失败只打印错误，继续监听，修复后自动重试。
+- 参数：`--out`、`--debug`、`--key`、`--home`、`--interval`（默认 500ms）、`--install`、`--device`、`--adb`。
+- `--install` 复用 `berba install` 的 adb 查找与 `install -r` 逻辑。
+
+## 退出码
+
+| 退出码 | 含义 |
+| --- | --- |
+| `0` | 成功（`help`、`version` 也是 0） |
+| `1` | 参数/用法错误、未分类的 IO 错误、用户中断（Ctrl-C） |
+| `2` | 配置错误：`app.json` 校验失败（包名、权限、入口、origin 等） |
+| `3` | 工具链问题：aapt2/android.jar/dex 缺失或不可执行、adb 安装失败 |
+| `4` | 构建过程失败：资源渲染、aapt2、打包、签名 |
+| `5` | 校验失败：签名自检、包名/versionCode 自检不一致、`doctor` 检查未通过 |
+
+失败原因写在 stderr，前缀为 `错误:`。CI 中可直接依据退出码区分“配置问题”与“工具链/构建问题”。`build`、`dev`、`watch`、`doctor`、`install` 均遵循该约定。
 
 ## 构建流水线
 
@@ -73,15 +122,22 @@ Linux/macOS：
 VERSION=0.1.0 ANDROID_SDK_ROOT=/path/to/sdk scripts/package-dist.sh
 ```
 
-shell 版本只打包当前平台（aapt2 必须与目标平台一致），产物命名 `berba-<版本>-<os>-<arch>.zip`；生成 zip 需要 `zip` 或 Python。
+shell 版本只打包当前平台（aapt2 必须与目标平台一致），产物命名 `berba-<版本>-<os>-<arch>.zip`。
 
 脚本执行：
 
 1. `go build -trimpath -ldflags "-s -w -X main.version=<版本>"` → `berba.exe`
 2. 编译 shell（`build-shell.ps1`：javac → jar → d8，min-api 24，合并 LuaJ）→ `payload/classes.dex`
-3. 复制 `aapt2.exe`、`android.jar`，生成 `tools/versions.json`（版本 + SHA-256）
-4. 附带 `NOTICE`、`README.md`、`docs/`
-5. 输出 `dist/windows-amd64/` 与 `dist/berba-<版本>-windows-amd64.zip`
+3. 复制 `aapt2.exe`、`android.jar`
+4. 调用 `berba release` 完成剩余工作
+
+`berba release` 是唯一的打包实现：
+
+```bash
+berba release --home dist/windows-amd64 --out dist --version 0.1.0 --docs .
+```
+
+它校验发行目录，读取 aapt2 版本，写入 `tools/versions.json`（版本 + aapt2/android.jar/dex 的 SHA-256），复制 `README.md`、`NOTICE`、`docs/`，然后按固定顺序与固定时间戳生成 zip，最后写出 `<zip>.sha256`。相同输入重复打包得到相同哈希，便于发布核对。`berba doctor` 会重新计算这些哈希并逐一比对，因此 shell dex 被篡改或版本漂移会立即被发现。
 
 单独编译 shell：
 
@@ -120,14 +176,7 @@ adb install -r dist/app.apk
 
 ### 真机矩阵
 
-建议至少覆盖 API 24 / 30 / 35：
-
-- 安装、启动、返回键、横竖屏切换
-- 本地页面加载、`fetch/XHR`、SPA 路由
-- `berba.call` → Lua → Promise 回传；`pageFinished` 事件
-- 权限申请与拒绝后再次申请
-- `http`、`file`、`store`、`ui` 冒烟
-- 远程 URL + origin 白名单；非白名单 origin 调用桥应被拒绝
+发布前的完整人工 smoke 清单（安装/启动、桥往返、返回键与生命周期、权限、文件选择与下载、深链、origin 白名单、Lua HTTP 网络策略、可复现构建）见 [testing.md](testing.md)。建议至少覆盖 API 24 / 30 / 35 各一台设备。
 
 ## 调试
 

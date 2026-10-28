@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -16,6 +17,27 @@ func TestInitScaffold(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(name))); err != nil {
 			t.Errorf("%s: %v", name, err)
 		}
+	}
+}
+
+func TestInitRewritesName(t *testing.T) {
+	dir := t.TempDir()
+	if err := runInit([]string{dir, "--name", "我的应用", "--package", "com.example.mine"}); err != nil {
+		t.Fatal(err)
+	}
+	htmlData, err := os.ReadFile(filepath.Join(dir, "www", "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(htmlData), "<title>我的应用</title>") {
+		t.Fatalf("title not rewritten: %s", htmlData)
+	}
+	appData, err := os.ReadFile(filepath.Join(dir, "app.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(appData), `"package": "com.example.mine"`) {
+		t.Fatalf("package not rewritten: %s", appData)
 	}
 }
 

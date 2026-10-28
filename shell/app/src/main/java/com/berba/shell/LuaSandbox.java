@@ -33,6 +33,7 @@ final class LuaSandbox {
         g.load(new Bit32Lib());
         LuaC.install(g);
 
+        g.set("load", LuaValue.NIL);
         g.set("dofile", LuaValue.NIL);
         g.set("loadfile", LuaValue.NIL);
         g.set("package", LuaValue.NIL);

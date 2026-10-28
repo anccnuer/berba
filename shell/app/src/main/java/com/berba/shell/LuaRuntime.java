@@ -33,7 +33,7 @@ final class LuaRuntime {
     private static final Set<String> WEB_EVENTS = new HashSet<>();
 
     static {
-        for (String e : new String[]{"create", "pause", "resume", "destroy", "back"}) {
+        for (String e : new String[]{"create", "pause", "resume", "destroy", "back", "newIntent"}) {
             APP_EVENTS.add(e);
         }
         for (String e : new String[]{"pageStarted", "pageFinished", "error"}) {
@@ -56,6 +56,7 @@ final class LuaRuntime {
     private final Set<String> moduleLoading = new HashSet<>();
     private final ExecutorService io = Executors.newCachedThreadPool();
     private volatile boolean started;
+    private volatile boolean shuttingDown;
 
     LuaRuntime(MainActivity activity, AppConfig config) {
         this.activity = activity;
@@ -90,7 +91,7 @@ final class LuaRuntime {
                 started = true;
             } catch (Throwable t) {
                 Log.e(TAG, "Lua 初始化失败", t);
-                activity.toastOnMain("Lua 初始化失败: " + message(t));
+                activity.toastOnMain("Lua 初始化失败: " + message(t), true);
             }
             if (onReady != null) {
                 onReady.run();
@@ -311,11 +312,13 @@ final class LuaRuntime {
     }
 
     void shutdown() {
-        if (handler == null) {
+        if (handler == null || shuttingDown) {
             return;
         }
+        shuttingDown = true;
         handler.post(() -> {
             dispatchEvent("destroy", null);
+            LuaApis.cancelAllHttp();
             io.shutdownNow();
             thread.quitSafely();
         });

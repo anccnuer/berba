@@ -13,10 +13,9 @@ import (
 )
 
 const (
-	v2BlockID           = 0x7109871A
-	rsaPKCS1SHA256      = 0x0103
-	contentChunkSize    = 1024 * 1024
-	maxSigningBlockScan = 64 * 1024 * 1024
+	v2BlockID        = 0x7109871A
+	rsaPKCS1SHA256   = 0x0103
+	contentChunkSize = 1024 * 1024
 )
 
 var apkSigBlockMagic = []byte("APK Sig Block 42")
@@ -43,6 +42,13 @@ func SignFile(inPath, outPath string, key *Key) error {
 }
 
 func Sign(data []byte, key *Key) ([]byte, error) {
+	return signWithKeys(data, []*Key{key})
+}
+
+func signWithKeys(data []byte, keys []*Key) ([]byte, error) {
+	if len(keys) == 0 {
+		return nil, fmt.Errorf("至少需要一个签名密钥")
+	}
 	eocd, err := findEOCD(data)
 	if err != nil {
 		return nil, err
@@ -59,31 +65,14 @@ func Sign(data []byte, key *Key) ([]byte, error) {
 	eocdBytes := data[eocd.pos:]
 	digest := computeContentDigest([][]byte{before, central, eocdBytes})
 
-	digestPair := append(u32(rsaPKCS1SHA256), lp(digest)...)
-	digestsRaw := lp(digestPair)
-	certsRaw := lp(key.CertDER)
-	attrsRaw := []byte{}
-	signedData := lp(digestsRaw)
-	signedData = append(signedData, lp(certsRaw)...)
-	signedData = append(signedData, lp(attrsRaw)...)
-
-	hashed := sha256.Sum256(signedData)
-	sig, err := rsa.SignPKCS1v15(rand.Reader, key.Private, crypto.SHA256, hashed[:])
-	if err != nil {
-		return nil, err
+	var signersRaw []byte
+	for _, key := range keys {
+		signer, err := buildSigner(key, digest)
+		if err != nil {
+			return nil, err
+		}
+		signersRaw = append(signersRaw, lp(signer)...)
 	}
-	sigPair := append(u32(rsaPKCS1SHA256), lp(sig)...)
-	sigsRaw := lp(sigPair)
-
-	pubDER, err := x509.MarshalPKIXPublicKey(&key.Private.PublicKey)
-	if err != nil {
-		return nil, err
-	}
-
-	signer := lp(signedData)
-	signer = append(signer, lp(sigsRaw)...)
-	signer = append(signer, lp(pubDER)...)
-	signersRaw := lp(signer)
 	value := lp(signersRaw)
 
 	pairLen := uint64(4 + len(value))
@@ -119,6 +108,34 @@ func Sign(data []byte, key *Key) ([]byte, error) {
 	out = append(out, central...)
 	out = append(out, newEOCD...)
 	return out, nil
+}
+
+func buildSigner(key *Key, digest []byte) ([]byte, error) {
+	digestPair := append(u32(rsaPKCS1SHA256), lp(digest)...)
+	digestsRaw := lp(digestPair)
+	certsRaw := lp(key.CertDER)
+	attrsRaw := []byte{}
+	signedData := lp(digestsRaw)
+	signedData = append(signedData, lp(certsRaw)...)
+	signedData = append(signedData, lp(attrsRaw)...)
+
+	hashed := sha256.Sum256(signedData)
+	sig, err := rsa.SignPKCS1v15(rand.Reader, key.Private, crypto.SHA256, hashed[:])
+	if err != nil {
+		return nil, err
+	}
+	sigPair := append(u32(rsaPKCS1SHA256), lp(sig)...)
+	sigsRaw := lp(sigPair)
+
+	pubDER, err := x509.MarshalPKIXPublicKey(&key.Private.PublicKey)
+	if err != nil {
+		return nil, err
+	}
+
+	signer := lp(signedData)
+	signer = append(signer, lp(sigsRaw)...)
+	signer = append(signer, lp(pubDER)...)
+	return signer, nil
 }
 
 func computeContentDigest(sections [][]byte) []byte {
@@ -205,10 +222,29 @@ func Verify(data []byte) (*VerifyResult, error) {
 		return nil, fmt.Errorf("解析 signers 失败: %w", err)
 	}
 	sp := &parser{data: signersRaw}
-	signerBytes, err := sp.lp()
-	if err != nil {
-		return nil, fmt.Errorf("解析 signer 失败: %w", err)
+	var result *VerifyResult
+	signers := 0
+	for sp.remaining() > 0 {
+		signerBytes, err := sp.lp()
+		if err != nil {
+			return nil, fmt.Errorf("解析 signer 失败: %w", err)
+		}
+		signers++
+		res, err := verifySigner(data, eocd, blockStart, signerBytes)
+		if err != nil {
+			return nil, err
+		}
+		if result == nil {
+			result = res
+		}
 	}
+	if signers == 0 {
+		return nil, fmt.Errorf("签名块中没有 signer")
+	}
+	return result, nil
+}
+
+func verifySigner(data []byte, eocd *eocdInfo, blockStart int, signerBytes []byte) (*VerifyResult, error) {
 	signer := &parser{data: signerBytes}
 	signedData, err := signer.lp()
 	if err != nil {
@@ -360,23 +396,21 @@ func findEOCD(data []byte) (*eocdInfo, error) {
 }
 
 func findSigningBlockStart(data []byte, cdOffset int) (int, error) {
-	min := cdOffset - maxSigningBlockScan
-	if min < 0 {
-		min = 0
+	if cdOffset < 32 || cdOffset > len(data) {
+		return 0, fmt.Errorf("未找到 APK Signing Block（APK 未签名）")
 	}
-	for p := cdOffset - 16 - 8; p >= min; p-- {
-		if p+8 > len(data) {
-			continue
-		}
-		size := binary.LittleEndian.Uint64(data[p:])
-		if size > uint64(maxSigningBlockScan) {
-			continue
-		}
-		if uint64(p)+8+size == uint64(cdOffset) {
-			return p, nil
-		}
+	if !bytes.Equal(data[cdOffset-16:cdOffset], apkSigBlockMagic) {
+		return 0, fmt.Errorf("未找到 APK Signing Block（APK 未签名）")
 	}
-	return 0, fmt.Errorf("无法定位 APK Signing Block 起点")
+	size := binary.LittleEndian.Uint64(data[cdOffset-24:])
+	if size < 24 || size > uint64(cdOffset-8) {
+		return 0, fmt.Errorf("签名块长度非法")
+	}
+	start := cdOffset - 8 - int(size)
+	if binary.LittleEndian.Uint64(data[start:]) != size {
+		return 0, fmt.Errorf("签名块首尾长度不一致")
+	}
+	return start, nil
 }
 
 type parser struct {

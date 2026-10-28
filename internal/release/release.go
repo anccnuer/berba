@@ -1,0 +1,307 @@
+// Package release 把已准备好的发行目录打包为可分发 zip。
+package release
+
+import (
+	"archive/zip"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"runtime"
+	"sort"
+	"strings"
+	"time"
+
+	"berba/internal/aapt2"
+	"berba/internal/payload"
+)
+
+// Options 是发行包的全部输入。Home 应包含 berba 可执行文件、tools/ 与 payload/。
+type Options struct {
+	Home         string
+	OutDir       string
+	DocsDir      string
+	Version      string
+	Platform     string
+	Aapt2Version string // 仅测试注入；为空时执行 aapt2 获取
+	Progress     func(string)
+}
+
+// Result 描述生成的发行包。
+type Result struct {
+	ZipPath  string
+	SHA256   string
+	Size     int64
+	Versions payload.VersionsFile
+}
+
+// Package 校验发行目录、写入 versions.json、复制文档并生成确定性 zip。
+func Package(ctx context.Context, opts Options) (*Result, error) {
+	if opts.Home == "" {
+		return nil, fmt.Errorf("未指定发行目录")
+	}
+	home, err := filepath.Abs(opts.Home)
+	if err != nil {
+		return nil, err
+	}
+	if opts.Version == "" {
+		return nil, fmt.Errorf("未指定版本号")
+	}
+	platform := opts.Platform
+	if platform == "" {
+		platform = "android-35"
+	}
+	progress := opts.Progress
+	if progress == nil {
+		progress = func(string) {}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	progress("校验发行目录")
+	layout, err := payload.Locate(home)
+	if err != nil {
+		return nil, err
+	}
+	tool, err := aapt2.Locate(layout.ToolsDir)
+	if err != nil {
+		return nil, err
+	}
+
+	aapt2Version := opts.Aapt2Version
+	if aapt2Version == "" {
+		progress("读取 aapt2 版本")
+		aapt2Version, err = tool.Version(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	progress("写入 versions.json")
+	shell := payload.ShellVersions{}
+	for _, dex := range layout.Dexes {
+		shell.DexSha256 = append(shell.DexSha256, mustHash(dex))
+	}
+	versions := payload.VersionsFile{
+		Version: opts.Version,
+		Aapt2: payload.VersionedHash{
+			Version: aapt2Version,
+			Sha256:  mustHash(layout.Aapt2),
+		},
+		AndroidJar: payload.VersionedHash{
+			Version: platform,
+			Sha256:  mustHash(layout.AndroidJar),
+		},
+		Shell: shell,
+	}
+	if err := writeVersions(layout.Versions, versions); err != nil {
+		return nil, err
+	}
+
+	if opts.DocsDir != "" {
+		progress("复制文档")
+		if err := copyDocs(opts.DocsDir, home); err != nil {
+			return nil, err
+		}
+	}
+
+	progress("生成发行 zip")
+	outDir := opts.OutDir
+	if outDir == "" {
+		outDir = filepath.Dir(home)
+	}
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return nil, err
+	}
+	name := fmt.Sprintf("berba-%s-%s-%s.zip", opts.Version, runtime.GOOS, runtime.GOARCH)
+	zipPath, sum, size, err := writeZip(ctx, home, outDir, name)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(zipPath+".sha256", []byte(sum+"  "+name+"\n"), 0o644); err != nil {
+		return nil, err
+	}
+	return &Result{ZipPath: zipPath, SHA256: sum, Size: size, Versions: versions}, nil
+}
+
+func mustHash(path string) string {
+	sum, err := payload.Sha256File(path)
+	if err != nil {
+		return ""
+	}
+	return sum
+}
+
+func writeVersions(path string, v payload.VersionsFile) error {
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(data, '\n'), 0o644)
+}
+
+func copyDocs(srcRoot, dstRoot string) error {
+	var files []string
+	for _, name := range []string{"README.md", "NOTICE"} {
+		if st, err := os.Stat(filepath.Join(srcRoot, name)); err == nil && !st.IsDir() {
+			files = append(files, name)
+		}
+	}
+	docsDir := filepath.Join(srcRoot, "docs")
+	if st, err := os.Stat(docsDir); err == nil && st.IsDir() {
+		err := filepath.WalkDir(docsDir, func(p string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.Type()&os.ModeSymlink != 0 {
+				return fmt.Errorf("不允许符号链接: %s", p)
+			}
+			if d.IsDir() {
+				return nil
+			}
+			rel, err := filepath.Rel(srcRoot, p)
+			if err != nil {
+				return err
+			}
+			files = append(files, rel)
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+	for _, rel := range files {
+		if err := copyFile(filepath.Join(srcRoot, rel), filepath.Join(dstRoot, rel)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
+}
+
+var zipEpoch = time.Date(1980, 1, 1, 0, 0, 0, 0, time.UTC)
+
+func writeZip(ctx context.Context, home, outDir, name string) (path, sum string, size int64, err error) {
+	var entries []string
+	err = filepath.WalkDir(home, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("不允许符号链接: %s", p)
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(home, p)
+		if err != nil {
+			return err
+		}
+		entries = append(entries, filepath.ToSlash(rel))
+		return nil
+	})
+	if err != nil {
+		return "", "", 0, err
+	}
+	sort.Strings(entries)
+
+	tmp, err := os.CreateTemp(outDir, "."+name+".*.tmp")
+	if err != nil {
+		return "", "", 0, err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+
+	h := sha256.New()
+	mw := io.MultiWriter(tmp, h)
+	zw := zip.NewWriter(mw)
+	for _, rel := range entries {
+		if err := ctx.Err(); err != nil {
+			tmp.Close()
+			return "", "", 0, err
+		}
+		info, err := os.Stat(filepath.Join(home, filepath.FromSlash(rel)))
+		if err != nil {
+			tmp.Close()
+			return "", "", 0, err
+		}
+		hdr, err := zip.FileInfoHeader(info)
+		if err != nil {
+			tmp.Close()
+			return "", "", 0, err
+		}
+		hdr.Name = rel
+		hdr.Method = zip.Deflate
+		hdr.SetModTime(zipEpoch)
+		w, err := zw.CreateHeader(hdr)
+		if err != nil {
+			tmp.Close()
+			return "", "", 0, err
+		}
+		f, err := os.Open(filepath.Join(home, filepath.FromSlash(rel)))
+		if err != nil {
+			tmp.Close()
+			return "", "", 0, err
+		}
+		_, copyErr := io.Copy(w, f)
+		f.Close()
+		if copyErr != nil {
+			tmp.Close()
+			return "", "", 0, copyErr
+		}
+	}
+	if err := zw.Close(); err != nil {
+		tmp.Close()
+		return "", "", 0, err
+	}
+	if err := tmp.Close(); err != nil {
+		return "", "", 0, err
+	}
+	final := filepath.Join(outDir, name)
+	if err := os.Rename(tmpPath, final); err != nil {
+		if removeErr := os.Remove(final); removeErr != nil && !os.IsNotExist(removeErr) {
+			return "", "", 0, err
+		}
+		if err := os.Rename(tmpPath, final); err != nil {
+			return "", "", 0, err
+		}
+	}
+	st, err := os.Stat(final)
+	if err != nil {
+		return "", "", 0, err
+	}
+	return final, hex.EncodeToString(h.Sum(nil)), st.Size(), nil
+}
+
+// SanitizeVersion 拒绝会破坏文件名或路径的版本号。
+func SanitizeVersion(v string) (string, error) {
+	v = strings.TrimSpace(v)
+	if v == "" || strings.ContainsAny(v, `/\:*?"<>|`) || strings.Contains(v, "..") {
+		return "", fmt.Errorf("版本号不合法: %q", v)
+	}
+	return v, nil
+}

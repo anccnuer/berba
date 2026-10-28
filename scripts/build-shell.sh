@@ -100,16 +100,19 @@ done < <(find "$SRC" -name '*.java' -print0)
   -cp "$ANDROID_JAR_ARG$CPSEP$LUAJ_ARG" \
   -d "$WORK/classes" "${SOURCES[@]}"
 
-echo "==> Lua 沙箱冒烟测试"
-TEST_SRC="$ROOT/shell/app/src/test/java/com/berba/shell/LuaSandboxTest.java"
-if [ -f "$TEST_SRC" ]; then
+echo "==> JVM 冒烟测试"
+TEST_DIR="$ROOT/shell/app/src/test/java/com/berba/shell"
+if [ -d "$TEST_DIR" ]; then
   rm -rf "$WORK/test-classes"
   mkdir -p "$WORK/test-classes"
-  "$JAVAC" --release 17 -encoding UTF-8 -cp "$LUAJ_ARG" -d "$WORK/test-classes" \
-    "$SRC/com/berba/shell/LuaSandbox.java" "$TEST_SRC"
+  "$JAVAC" --release 17 -encoding UTF-8 \
+    -cp "$WORK_ARG/classes$CPSEP$ANDROID_JAR_ARG$CPSEP$LUAJ_ARG" \
+    -d "$WORK/test-classes" "$TEST_DIR"/*.java
   JAVA_CMD="${JAVA_BIN}java"
   command -v "$JAVA_CMD" >/dev/null 2>&1 || die "找不到 java（需要完整 JDK，可设置 JAVA_HOME）"
-  "$JAVA_CMD" -cp "$WORK_ARG/test-classes$CPSEP$LUAJ_ARG" com.berba.shell.LuaSandboxTest
+  TEST_CP="$WORK_ARG/test-classes$CPSEP$WORK_ARG/classes$CPSEP$ANDROID_JAR_ARG$CPSEP$LUAJ_ARG"
+  "$JAVA_CMD" -cp "$TEST_CP" com.berba.shell.LuaSandboxTest
+  "$JAVA_CMD" -cp "$TEST_CP" com.berba.shell.NetworkPolicyTest
 fi
 
 echo "==> 打包 shell.jar"

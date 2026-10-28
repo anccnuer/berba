@@ -1,11 +1,13 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 
+	"berba/internal/clierr"
 	"berba/internal/payload"
 )
 
@@ -19,7 +21,7 @@ func runDoctor(args []string) error {
 	layout, err := payload.Locate(*home)
 	if err != nil {
 		fmt.Fprintf(out, "✗ %v\n", err)
-		return err
+		return clierr.New(clierr.CodeToolchain, "", err)
 	}
 	fmt.Fprintf(out, "发行包目录: %s\n", layout.Home)
 	fmt.Fprintf(out, "  平台: %s/%s\n", runtime.GOOS, runtime.GOARCH)
@@ -56,18 +58,22 @@ func runDoctor(args []string) error {
 				if item.hash == "" {
 					continue
 				}
-				actual, err := payload.Sha256File(item.path)
-				if err != nil {
-					fmt.Fprintf(out, "  ✗ 无法计算 %s 哈希: %v\n", item.label, err)
+				if !checkHash(item.label, item.path, item.hash) {
 					ok = false
-					continue
 				}
-				if actual != item.hash {
-					fmt.Fprintf(out, "  ✗ %s 哈希不匹配（文件被修改或版本漂移）\n", item.label)
-					ok = false
-					continue
+			}
+			switch {
+			case len(vf.Shell.DexSha256) == 0:
+				fmt.Fprintf(out, "  ! versions.json 未记录 dex 哈希（旧发行包），跳过校验\n")
+			case len(vf.Shell.DexSha256) != len(layout.Dexes):
+				fmt.Fprintf(out, "  ✗ dex 哈希数量与现场文件不一致（清单 %d，实际 %d）\n", len(vf.Shell.DexSha256), len(layout.Dexes))
+				ok = false
+			default:
+				for i, dex := range layout.Dexes {
+					if !checkHash("shell dex "+filepath.Base(dex), dex, vf.Shell.DexSha256[i]) {
+						ok = false
+					}
 				}
-				fmt.Fprintf(out, "  ✓ %s 哈希一致\n", item.label)
 			}
 		} else {
 			fmt.Fprintf(out, "  ! 无法读取 versions.json: %v\n", err)
@@ -85,7 +91,7 @@ func runDoctor(args []string) error {
 	if err != nil {
 		fmt.Fprintf(out, "  ✗ %v\n", err)
 		ok = false
-	} else if v, err := tool.Version(); err != nil {
+	} else if v, err := tool.Version(context.Background()); err != nil {
 		fmt.Fprintf(out, "  ✗ aapt2 无法运行: %v\n", err)
 		ok = false
 	} else {
@@ -93,8 +99,22 @@ func runDoctor(args []string) error {
 	}
 
 	if !ok {
-		return fmt.Errorf("检查未通过")
+		return clierr.New(clierr.CodeVerify, "", fmt.Errorf("检查未通过"))
 	}
 	fmt.Fprintln(out, "全部检查通过，可以开始构建。")
 	return nil
+}
+
+func checkHash(label, path, want string) bool {
+	actual, err := payload.Sha256File(path)
+	if err != nil {
+		fmt.Fprintf(out, "  ✗ 无法计算 %s 哈希: %v\n", label, err)
+		return false
+	}
+	if actual != want {
+		fmt.Fprintf(out, "  ✗ %s 哈希不匹配（文件被修改或版本漂移）\n", label)
+		return false
+	}
+	fmt.Fprintf(out, "  ✓ %s 哈希一致\n", label)
+	return true
 }

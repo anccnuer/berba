@@ -8,6 +8,7 @@ import (
 	"sort"
 
 	"berba/internal/aapt2"
+	"berba/internal/clierr"
 	"berba/internal/payload"
 )
 
@@ -46,8 +47,11 @@ func runInstall(args []string) error {
 	if st, err := os.Stat(apk); err != nil || st.IsDir() {
 		return fmt.Errorf("APK 不存在: %s", apk)
 	}
+	return installAPK(apk, *device, *adbPath)
+}
 
-	adb := *adbPath
+func installAPK(apk, device, adbPath string) error {
+	adb := adbPath
 	if adb == "" {
 		adb = os.Getenv("BERBA_ADB")
 	}
@@ -62,8 +66,8 @@ func runInstall(args []string) error {
 	}
 
 	cmdArgs := []string{}
-	if *device != "" {
-		cmdArgs = append(cmdArgs, "-s", *device)
+	if device != "" {
+		cmdArgs = append(cmdArgs, "-s", device)
 	}
 	cmdArgs = append(cmdArgs, "install", "-r", apk)
 	cmd := exec.Command(adb, cmdArgs...)
@@ -72,7 +76,7 @@ func runInstall(args []string) error {
 	cmd.Stdin = os.Stdin
 	fmt.Fprintf(out, "运行: %s %s\n", adb, joinArgs(cmdArgs))
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("adb install 失败: %w", err)
+		return clierr.New(clierr.CodeToolchain, "adb install 失败", err)
 	}
 	return nil
 }

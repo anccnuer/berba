@@ -31,10 +31,19 @@ jobs:
         with:
           packages: "platforms;android-35 build-tools;35.0.0"
 
+      - name: Go format check
+        run: |
+          test -z "$(gofmt -l .)"
+
       - name: Go tests
         run: |
-          go test ./...
+          go test -race ./...
           go vet ./...
+
+      - name: Staticcheck
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@latest
+          "$(go env GOPATH)/bin/staticcheck" ./...
 
       - name: Fetch LuaJ
         run: |
@@ -49,11 +58,13 @@ jobs:
           OUT="$RUNNER_TEMP/dist/payload" bash scripts/build-shell.sh
 
       - name: Assemble CLI + tools
+        env:
+          VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '0.0.0-ci' }}
         run: |
           set -euo pipefail
           DIST="$RUNNER_TEMP/dist"
           mkdir -p "$DIST/tools"
-          go build -trimpath -ldflags "-s -w -X main.version=0.0.0-ci" -o "$DIST/berba" ./cmd/berba
+          go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o "$DIST/berba" ./cmd/berba
           cp "$ANDROID_SDK_ROOT/platforms/android-35/android.jar" "$DIST/tools/android.jar"
           BT="$(ls -1 "$ANDROID_SDK_ROOT/build-tools" | sort -V | tail -1)"
           cp "$ANDROID_SDK_ROOT/build-tools/$BT/aapt2" "$DIST/tools/aapt2"
@@ -77,8 +88,53 @@ jobs:
           "$ANDROID_SDK_ROOT/build-tools/$BT/aapt2" dump badging "$APK"
           unzip -l "$APK"
 
+      - name: Reproducible build
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/dist/berba" build "$RUNNER_TEMP/hello" --home "$RUNNER_TEMP/dist" --out "$RUNNER_TEMP/hello/dist2"
+          cmp "$RUNNER_TEMP/hello/dist/"*.apk "$RUNNER_TEMP/hello/dist2/"*.apk
+
+      - name: Package release zip
+        env:
+          VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '0.0.0-ci' }}
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/dist/berba" release --home "$RUNNER_TEMP/dist" --out "$RUNNER_TEMP/release" \
+            --version "$VERSION" --docs "$GITHUB_WORKSPACE"
+
       - uses: actions/upload-artifact@v4
         with:
           name: ci-apk
-          path: ${{ runner.temp }}/hello/dist/*.apk
+          path: |
+            ${{ runner.temp }}/hello/dist/*.apk
+            ${{ runner.temp }}/hello/dist/*.sha256
           if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ci-release
+          path: |
+            ${{ runner.temp }}/release/*.zip
+            ${{ runner.temp }}/release/*.zip.sha256
+          if-no-files-found: error
+
+  test-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Go format check
+        shell: bash
+        run: |
+          test -z "$(gofmt -l .)"
+
+      - name: Go tests
+        shell: bash
+        run: |
+          go test ./...
+          go vet ./...

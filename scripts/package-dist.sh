@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 组装当前平台（Linux/macOS）的发行包。
-# 依赖: Go 1.24+、JDK 17+、Android SDK、LuaJ jar，以及 zip 或 python。
+# 依赖: Go 1.24+、JDK 17+、Android SDK、LuaJ jar。
 #
 # 用法: VERSION=0.1.0 scripts/package-dist.sh
 # 环境变量:
@@ -59,35 +59,6 @@ hash_file() {
   fi
 }
 
-make_zip() {
-  local src="$1" out="$2"
-  if command -v zip >/dev/null 2>&1; then
-    (cd "$src" && zip -qr "$out" .)
-    return
-  fi
-  local py=""
-  for cand in python3 python; do
-    if command -v "$cand" >/dev/null 2>&1 && "$cand" -c 'import sys' >/dev/null 2>&1; then
-      py="$cand"
-      break
-    fi
-  done
-  if [ -n "$py" ]; then
-    "$py" - "$src" "$out" <<'PY'
-import os, sys, zipfile
-src, out = sys.argv[1], sys.argv[2]
-with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
-    for root, dirs, files in os.walk(src):
-        dirs.sort()
-        for f in sorted(files):
-            p = os.path.join(root, f)
-            z.write(p, os.path.relpath(p, src).replace(os.sep, "/"))
-PY
-  else
-    die "需要 zip 或 python 来生成压缩包"
-  fi
-}
-
 echo "==> 清理 $STAGE"
 rm -rf "$STAGE"
 mkdir -p "$STAGE/tools" "$STAGE/payload"
@@ -105,34 +76,10 @@ echo "==> 编译 shell payload"
 ANDROID_SDK_ROOT="$SDK" PLATFORM="$PLATFORM" BUILD_TOOLS="$BUILD_TOOLS" \
   OUT="$STAGE/payload" LUAJ_JAR="$LUAJ" bash "$ROOT/scripts/build-shell.sh"
 
-echo "==> 写入 versions.json"
-AAPT2_VERSION="$("$AAPT2" version 2>&1 | head -1 | sed 's/^.* : //')"
-[ -n "$AAPT2_VERSION" ] || die "无法获取 aapt2 版本"
-AAPT2_VERSION_JSON="$(printf '%s' "$AAPT2_VERSION" | sed 's/\\/\\\\/g; s/"/\\"/g')"
-cat > "$STAGE/tools/versions.json" <<EOF
-{
-  "version": "$VERSION",
-  "aapt2": {
-    "version": "$AAPT2_VERSION_JSON",
-    "sha256": "$(hash_file "$STAGE/tools/$(basename "$AAPT2")")"
-  },
-  "androidJar": {
-    "version": "$PLATFORM",
-    "sha256": "$(hash_file "$STAGE/tools/android.jar")"
-  }
-}
-EOF
-
-echo "==> 复制文档"
-for item in NOTICE README.md; do
-  [ -f "$ROOT/$item" ] && cp "$ROOT/$item" "$STAGE/"
-done
-[ -d "$ROOT/docs" ] && cp -R "$ROOT/docs" "$STAGE/"
-
-echo "==> 生成 zip"
+echo "==> 生成发行包（versions.json + 文档 + zip）"
 mkdir -p "$OUTDIR"
-rm -f "$ZIP"
-make_zip "$STAGE" "$ZIP"
+"$STAGE/berba$EXE" release --home "$STAGE" --out "$OUTDIR" --version "$VERSION" \
+  --platform "$PLATFORM" --docs "$ROOT"
 
 echo ""
 echo "完成: $ZIP ($(du -h "$ZIP" | awk '{print $1}'))"

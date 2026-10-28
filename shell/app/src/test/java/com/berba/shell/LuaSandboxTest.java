@@ -22,6 +22,7 @@ public final class LuaSandboxTest {
         check(g.get("coroutine").istable(), "coroutine 库未加载");
         check(g.get("bit32").istable(), "bit32 库未加载");
         check(g.get("package").isnil(), "package 不应暴露");
+        check(g.get("load").isnil(), "load 不应暴露");
         check(g.get("dofile").isnil(), "dofile 不应暴露");
         check(g.get("loadfile").isnil(), "loadfile 不应暴露");
         check(g.get("luajava").isnil(), "luajava 不应暴露");
