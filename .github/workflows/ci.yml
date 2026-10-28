@@ -1,0 +1,77 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: "platforms;android-35 build-tools;35.0.0"
+
+      - name: Go tests
+        run: |
+          go test ./...
+          go vet ./...
+
+      - name: Fetch LuaJ
+        run: |
+          mkdir -p .tools/luaj
+          curl -fsSL -o .tools/luaj/luaj-jse-3.0.1.jar \
+            https://repo1.maven.org/maven2/org/luaj/luaj-jse/3.0.1/luaj-jse-3.0.1.jar
+
+      - name: Build shell payload
+        env:
+          LUAJ_JAR: ${{ github.workspace }}/.tools/luaj/luaj-jse-3.0.1.jar
+        run: |
+          OUT="$RUNNER_TEMP/dist/payload" bash scripts/build-shell.sh
+
+      - name: Assemble CLI + tools
+        run: |
+          set -euo pipefail
+          DIST="$RUNNER_TEMP/dist"
+          mkdir -p "$DIST/tools"
+          go build -trimpath -ldflags "-s -w -X main.version=0.0.0-ci" -o "$DIST/guiapp" ./cmd/guiapp
+          cp "$ANDROID_SDK_ROOT/platforms/android-35/android.jar" "$DIST/tools/android.jar"
+          BT="$(ls -1 "$ANDROID_SDK_ROOT/build-tools" | sort -V | tail -1)"
+          cp "$ANDROID_SDK_ROOT/build-tools/$BT/aapt2" "$DIST/tools/aapt2"
+
+      - name: Doctor
+        run: |
+          "$RUNNER_TEMP/dist/guiapp" doctor --home "$RUNNER_TEMP/dist"
+
+      - name: Build example APK
+        run: |
+          "$RUNNER_TEMP/dist/guiapp" init "$RUNNER_TEMP/hello" --package com.example.ci --name "CI 示例"
+          "$RUNNER_TEMP/dist/guiapp" build "$RUNNER_TEMP/hello" --home "$RUNNER_TEMP/dist"
+
+      - name: Verify APK
+        run: |
+          set -euo pipefail
+          BT="$(ls -1 "$ANDROID_SDK_ROOT/build-tools" | sort -V | tail -1)"
+          APK="$(ls "$RUNNER_TEMP"/hello/dist/*.apk | head -1)"
+          "$ANDROID_SDK_ROOT/build-tools/$BT/apksigner" verify --print-certs "$APK"
+          "$ANDROID_SDK_ROOT/build-tools/$BT/zipalign" -c -v 4 "$APK"
+          "$ANDROID_SDK_ROOT/build-tools/$BT/aapt2" dump badging "$APK"
+          unzip -l "$APK"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ci-apk
+          path: ${{ runner.temp }}/hello/dist/*.apk
+          if-no-files-found: error

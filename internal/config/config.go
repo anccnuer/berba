@@ -1,0 +1,352 @@
+package config
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/url"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+)
+
+const (
+	LocalHost       = "appassets.androidhost"
+	LocalOrigin     = "https://" + LocalHost
+	DefaultStartURL = LocalOrigin + "/index.html"
+)
+
+var packageRE = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$`)
+
+type WebConfig struct {
+	Dir            string   `json:"dir"`
+	StartURL       string   `json:"startUrl"`
+	SPA            bool     `json:"spa"`
+	AllowedOrigins []string `json:"allowedOrigins"`
+}
+
+type LuaConfig struct {
+	Dir   string `json:"dir"`
+	Entry string `json:"entry"`
+}
+
+type Config struct {
+	Name        string            `json:"name"`
+	Package     string            `json:"package"`
+	VersionName string            `json:"versionName"`
+	VersionCode int               `json:"versionCode"`
+	Icon        string            `json:"icon"`
+	Orientation string            `json:"orientation"`
+	Theme       string            `json:"theme"`
+	Cleartext   bool              `json:"cleartext"`
+	Permissions []string          `json:"permissions"`
+	MetaData    map[string]string `json:"metaData"`
+	Web         WebConfig         `json:"web"`
+	Lua         LuaConfig         `json:"lua"`
+	Debug       bool              `json:"debug"`
+}
+
+type Project struct {
+	Root           string
+	ConfigPath     string
+	Config         Config
+	Permissions    []string
+	IconPath       string
+	WebDir         string
+	LuaDir         string
+	HasLua         bool
+	LocalStart     bool
+	StartURL       *url.URL
+	AllowedOrigins []string
+}
+
+func Load(path string) (*Project, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(abs)
+	if err != nil {
+		return nil, fmt.Errorf("读取配置失败: %w", err)
+	}
+
+	cfg := Config{
+		VersionCode: 1,
+		Orientation: "auto",
+		Theme:       "light",
+		Web: WebConfig{
+			Dir:      "www",
+			StartURL: DefaultStartURL,
+		},
+		Lua: LuaConfig{
+			Dir:   "lua",
+			Entry: "main.lua",
+		},
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("解析 app.json 失败: %w", err)
+	}
+
+	p := &Project{
+		Root:       filepath.Dir(abs),
+		ConfigPath: abs,
+		Config:     cfg,
+	}
+	if err := p.finish(); err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
+func (p *Project) finish() error {
+	cfg := &p.Config
+	cfg.Name = strings.TrimSpace(cfg.Name)
+	cfg.Package = strings.TrimSpace(cfg.Package)
+	cfg.VersionName = strings.TrimSpace(cfg.VersionName)
+
+	if cfg.Name == "" {
+		return fmt.Errorf("name 不能为空")
+	}
+	if err := ValidatePackage(cfg.Package); err != nil {
+		return err
+	}
+	if cfg.VersionName == "" {
+		return fmt.Errorf("versionName 不能为空")
+	}
+	if cfg.VersionCode < 1 {
+		return fmt.Errorf("versionCode 必须大于 0")
+	}
+	switch cfg.Orientation {
+	case "auto", "portrait", "landscape":
+	default:
+		return fmt.Errorf("orientation 只能是 auto / portrait / landscape")
+	}
+	switch cfg.Theme {
+	case "light", "dark", "device":
+	default:
+		return fmt.Errorf("theme 只能是 light / dark / device")
+	}
+
+	if cfg.Web.Dir == "" {
+		cfg.Web.Dir = "www"
+	}
+	if cfg.Web.StartURL == "" {
+		cfg.Web.StartURL = DefaultStartURL
+	}
+	p.WebDir = resolve(p.Root, cfg.Web.Dir)
+	info, err := os.Stat(p.WebDir)
+	if err != nil || !info.IsDir() {
+		return fmt.Errorf("web.dir 不存在或不是目录: %s", p.WebDir)
+	}
+
+	start, err := url.Parse(cfg.Web.StartURL)
+	if err != nil || start.Host == "" {
+		return fmt.Errorf("web.startUrl 不合法: %q", cfg.Web.StartURL)
+	}
+	switch start.Scheme {
+	case "https", "http":
+	default:
+		return fmt.Errorf("web.startUrl 只支持 http/https: %q", cfg.Web.StartURL)
+	}
+	if start.Host == LocalHost {
+		if start.Scheme != "https" {
+			return fmt.Errorf("本地页面必须使用 https://%s/", LocalHost)
+		}
+		p.LocalStart = true
+		rel := strings.TrimPrefix(start.Path, "/")
+		if rel == "" {
+			rel = "index.html"
+		}
+		rel = filepath.FromSlash(filepath.Clean(rel))
+		if rel == "." || strings.HasPrefix(rel, "..") {
+			return fmt.Errorf("web.startUrl 路径不合法: %q", start.Path)
+		}
+		full := filepath.Join(p.WebDir, rel)
+		if !within(p.WebDir, full) {
+			return fmt.Errorf("web.startUrl 路径越界: %q", start.Path)
+		}
+		if st, err := os.Stat(full); err != nil || st.IsDir() {
+			return fmt.Errorf("本地入口文件不存在: %s", full)
+		}
+	} else {
+		if start.Scheme == "http" && !cfg.Cleartext {
+			return fmt.Errorf("远程 http 页面需要设置 cleartext: true（不推荐）")
+		}
+	}
+	p.StartURL = start
+
+	origins := make([]string, 0, len(cfg.Web.AllowedOrigins)+1)
+	seen := map[string]bool{}
+	for _, raw := range cfg.Web.AllowedOrigins {
+		o, err := normalizeOrigin(raw)
+		if err != nil {
+			return err
+		}
+		if !seen[o] {
+			seen[o] = true
+			origins = append(origins, o)
+		}
+	}
+	if p.LocalStart && !seen[LocalOrigin] {
+		seen[LocalOrigin] = true
+		origins = append(origins, LocalOrigin)
+	}
+	p.AllowedOrigins = origins
+
+	if cfg.Lua.Dir == "" {
+		cfg.Lua.Dir = "lua"
+	}
+	p.LuaDir = resolve(p.Root, cfg.Lua.Dir)
+	if info, err := os.Stat(p.LuaDir); err == nil && info.IsDir() {
+		entry := cfg.Lua.Entry
+		if entry == "" {
+			entry = "main.lua"
+		}
+		entryPath := filepath.Join(p.LuaDir, filepath.FromSlash(entry))
+		if !within(p.LuaDir, entryPath) {
+			return fmt.Errorf("lua.entry 路径越界: %q", entry)
+		}
+		if st, err := os.Stat(entryPath); err != nil || st.IsDir() {
+			return fmt.Errorf("Lua 入口文件不存在: %s", entryPath)
+		}
+		p.HasLua = true
+	}
+
+	if cfg.Icon != "" {
+		p.IconPath = resolve(p.Root, cfg.Icon)
+		st, err := os.Stat(p.IconPath)
+		if err != nil || st.IsDir() {
+			return fmt.Errorf("icon 不存在或不是文件: %s", p.IconPath)
+		}
+	}
+
+	perms := make([]string, 0, len(cfg.Permissions)+1)
+	seenPerm := map[string]bool{}
+	addPerm := func(full string) {
+		if !seenPerm[full] {
+			seenPerm[full] = true
+			perms = append(perms, full)
+		}
+	}
+	for _, raw := range cfg.Permissions {
+		full, err := NormalizePermission(raw)
+		if err != nil {
+			return err
+		}
+		addPerm(full)
+	}
+	addPerm("android.permission.INTERNET")
+	p.Permissions = perms
+
+	for name := range cfg.MetaData {
+		if strings.TrimSpace(name) == "" {
+			return fmt.Errorf("metaData 的 key 不能为空")
+		}
+	}
+	return nil
+}
+
+func ValidatePackage(pkg string) error {
+	if !packageRE.MatchString(pkg) {
+		return fmt.Errorf("package 不合法: %q（示例: com.example.myapp）", pkg)
+	}
+	for _, prefix := range []string{"android.", "com.android.", "java.", "javax."} {
+		if strings.HasPrefix(pkg, prefix) {
+			return fmt.Errorf("package 不能使用保留前缀 %q", prefix)
+		}
+	}
+	return nil
+}
+
+func resolve(root, path string) string {
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path)
+	}
+	return filepath.Clean(filepath.Join(root, filepath.FromSlash(path)))
+}
+
+func within(root, child string) bool {
+	rel, err := filepath.Rel(root, child)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func normalizeOrigin(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return "", fmt.Errorf("allowedOrigins 不合法: %q", raw)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", fmt.Errorf("allowedOrigins 只支持 http/https: %q", raw)
+	}
+	if u.Path != "" && u.Path != "/" {
+		return "", fmt.Errorf("allowedOrigins 只能是 origin，不能带路径: %q", raw)
+	}
+	return strings.ToLower(u.Scheme) + "://" + strings.ToLower(u.Host), nil
+}
+
+func OriginOf(u *url.URL) string {
+	if u == nil || u.Host == "" {
+		return ""
+	}
+	return strings.ToLower(u.Scheme) + "://" + strings.ToLower(u.Host)
+}
+
+func (p *Project) OriginAllowed(origin string) bool {
+	origin = strings.ToLower(strings.TrimSuffix(origin, "/"))
+	for _, o := range p.AllowedOrigins {
+		if strings.ToLower(o) == origin {
+			return true
+		}
+	}
+	return false
+}
+
+var permissionAliases = map[string]string{
+	"INTERNET":                   "android.permission.INTERNET",
+	"ACCESS_NETWORK_STATE":       "android.permission.ACCESS_NETWORK_STATE",
+	"CAMERA":                     "android.permission.CAMERA",
+	"RECORD_AUDIO":               "android.permission.RECORD_AUDIO",
+	"ACCESS_FINE_LOCATION":       "android.permission.ACCESS_FINE_LOCATION",
+	"ACCESS_COARSE_LOCATION":     "android.permission.ACCESS_COARSE_LOCATION",
+	"ACCESS_BACKGROUND_LOCATION": "android.permission.ACCESS_BACKGROUND_LOCATION",
+	"READ_EXTERNAL_STORAGE":      "android.permission.READ_EXTERNAL_STORAGE",
+	"WRITE_EXTERNAL_STORAGE":     "android.permission.WRITE_EXTERNAL_STORAGE",
+	"READ_MEDIA_IMAGES":          "android.permission.READ_MEDIA_IMAGES",
+	"READ_MEDIA_VIDEO":           "android.permission.READ_MEDIA_VIDEO",
+	"READ_MEDIA_AUDIO":           "android.permission.READ_MEDIA_AUDIO",
+	"POST_NOTIFICATIONS":         "android.permission.POST_NOTIFICATIONS",
+	"VIBRATE":                    "android.permission.VIBRATE",
+	"WAKE_LOCK":                  "android.permission.WAKE_LOCK",
+	"BLUETOOTH":                  "android.permission.BLUETOOTH",
+	"BLUETOOTH_CONNECT":          "android.permission.BLUETOOTH_CONNECT",
+	"NFC":                        "android.permission.NFC",
+	"CALL_PHONE":                 "android.permission.CALL_PHONE",
+	"READ_CONTACTS":              "android.permission.READ_CONTACTS",
+	"READ_CALENDAR":              "android.permission.READ_CALENDAR",
+	"BODY_SENSORS":               "android.permission.BODY_SENSORS",
+	"ACTIVITY_RECOGNITION":       "android.permission.ACTIVITY_RECOGNITION",
+	"SYSTEM_ALERT_WINDOW":        "android.permission.SYSTEM_ALERT_WINDOW",
+}
+
+func NormalizePermission(raw string) (string, error) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return "", fmt.Errorf("permissions 中存在空项")
+	}
+	if strings.HasPrefix(s, "android.permission.") {
+		name := strings.TrimPrefix(s, "android.permission.")
+		if !regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`).MatchString(name) {
+			return "", fmt.Errorf("权限名不合法: %q", raw)
+		}
+		return s, nil
+	}
+	key := strings.ToUpper(strings.ReplaceAll(s, "-", "_"))
+	if full, ok := permissionAliases[key]; ok {
+		return full, nil
+	}
+	return "", fmt.Errorf("未知权限 %q；可写完整 android.permission.X 或使用内置别名", raw)
+}

@@ -1,0 +1,21 @@
+{
+  "name": "应援横幅",
+  "package": "com.example.ledbanner",
+  "versionName": "1.0.0",
+  "versionCode": 1,
+  "orientation": "portrait",
+  "theme": "dark",
+  "cleartext": false,
+  "permissions": [],
+  "web": {
+    "dir": "www",
+    "startUrl": "https://appassets.androidhost/index.html",
+    "spa": false,
+    "allowedOrigins": []
+  },
+  "lua": {
+    "dir": "lua",
+    "entry": "main.lua"
+  },
+  "debug": false
+}

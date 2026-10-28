@@ -1,0 +1,11 @@
+
+.tools/
+dist/
+build/
+.guiapp/
+payload/
+*.apk
+*.aab
+*.keystore
+*.pem
+*.log
