@@ -63,6 +63,7 @@ myapp/
   icon.png          可选，图标（PNG/JPG，建议 512x512）
   www/              前端页面
   lua/              Lua 逻辑，默认入口 main.lua
+  AGENTS.md         AI Agent 开发指南（能力边界与 API）
   .berba/          构建中间文件与签名密钥（不要提交）
   dist/             构建产物
 ```

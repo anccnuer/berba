@@ -1,9 +1,23 @@
 package cli
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
+
+func TestInitScaffold(t *testing.T) {
+	dir := t.TempDir()
+	if err := runInit([]string{dir}); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"app.json", "AGENTS.md", "www/index.html", "lua/main.lua"} {
+		if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(name))); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
 
 func TestParseArgsInterspersed(t *testing.T) {
 	fs := newFlagSet("test", "test")

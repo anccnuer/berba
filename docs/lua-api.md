@@ -214,7 +214,7 @@ local t, err = json.decode(text)       -- 失败返回 nil, 错误信息
 log("任意", "参数", 123)                -- 输出到 Logcat，tag = berba
 ```
 
-JSON 与 Lua 表的转换规则：键为 `1..n` 连续整数的表编码为数组，其余编码为对象；`nil` 为 `null`。函数、userdata 等无法编码的值会报错。
+JSON 与 Lua 表的转换规则：键为 `1..n` 连续整数的表编码为数组，其余编码为对象（空表为 `{}`）；`nil` 为 `null`。函数、userdata 编码为 `null`；存在循环引用或嵌套超过 64 层时整体输出 `null`。
 
 ## JS 侧接口
 
