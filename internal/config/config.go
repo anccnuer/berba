@@ -303,7 +303,7 @@ func (p *Project) finish() error {
 			return fmt.Errorf("lua.entry 路径越界: %q", entry)
 		}
 		if st, err := os.Stat(entryPath); err != nil || st.IsDir() {
-			return fmt.Errorf("Lua 入口文件不存在: %s", entryPath)
+			return fmt.Errorf("未找到 Lua 入口文件: %s", entryPath)
 		}
 		p.HasLua = true
 	} else if luaDirSet {

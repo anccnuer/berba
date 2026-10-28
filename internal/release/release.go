@@ -274,7 +274,7 @@ func writeZip(ctx context.Context, home, outDir, name string) (path, sum string,
 		}
 		hdr.Name = rel
 		hdr.Method = zip.Deflate
-		hdr.SetModTime(zipEpoch)
+		hdr.Modified = zipEpoch
 		w, err := zw.CreateHeader(hdr)
 		if err != nil {
 			tmp.Close()

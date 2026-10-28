@@ -1,0 +1,20 @@
+# 统一换行符：仓库内文本一律 LF。
+# 没有这份文件时 Windows 检出会按 core.autocrlf 转成 CRLF，
+# 导致 CI 里 gofmt -l 误报所有 .go 文件。
+* text=auto eol=lf
+
+*.jar binary
+*.dex binary
+*.aar binary
+*.zip binary
+*.apk binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.ttf binary
+*.otf binary
+*.mp3 binary
+*.mp4 binary

@@ -388,7 +388,7 @@ func findEOCD(data []byte) (*eocdInfo, error) {
 			return nil, fmt.Errorf("暂不支持 ZIP64 APK")
 		}
 		if uint64(cdOffset)+uint64(cdSize) > uint64(i) {
-			return nil, fmt.Errorf("Central Directory 偏移非法")
+			return nil, fmt.Errorf("中央目录偏移非法")
 		}
 		return &eocdInfo{pos: i, cdOffset: cdOffset, cdSize: cdSize}, nil
 	}

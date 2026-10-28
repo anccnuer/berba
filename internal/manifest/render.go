@@ -146,7 +146,7 @@ func TargetSDK() int { return targetSDK }
 
 func Validate(data []byte) error {
 	if !bytes.HasPrefix(bytes.TrimSpace(data), []byte("<manifest")) {
-		return fmt.Errorf("Manifest 渲染结果异常")
+		return fmt.Errorf("渲染结果异常: 不是有效的 manifest 文档")
 	}
 	return nil
 }
