@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"guiapp/internal/cli"
+	"berba/internal/cli"
 )
 
 var version = "0.1.0-dev"

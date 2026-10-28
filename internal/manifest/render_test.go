@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"guiapp/internal/config"
+	"berba/internal/config"
 )
 
 func testProject() *config.Project {
@@ -42,7 +42,7 @@ func TestRenderBasic(t *testing.T) {
 		`android:theme="@android:style/Theme.Material.NoActionBar"`,
 		`android:usesCleartextTraffic="true"`,
 		`android:screenOrientation="landscape"`,
-		`android:name="com.guiapp.shell.MainActivity"`,
+		`android:name="com.berba.shell.MainActivity"`,
 		`android:label="@string/app_name"`,
 		`android:icon="@mipmap/ic_launcher"`,
 		`android:value="a&amp;b"`,

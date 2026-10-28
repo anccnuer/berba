@@ -1,4 +1,4 @@
-package com.guiapp.shell;
+package com.berba.shell;
 
 import android.content.Context;
 import android.content.pm.PackageInfo;
@@ -17,9 +17,9 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
-/** 读取 assets/app_config.json，由 guiapp 构建时写入。 */
+/** 读取 assets/app_config.json，由 berba 构建时写入。 */
 final class AppConfig {
-    private static final String TAG = "guiapp";
+    private static final String TAG = "berba";
     static final String LOCAL_HOST = "appassets.androidhost";
     static final String LOCAL_ORIGIN = "https://" + LOCAL_HOST;
 

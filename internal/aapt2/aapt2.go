@@ -33,7 +33,7 @@ func Locate(toolsDir string) (*Tool, error) {
 	for _, p := range []string{t.Aapt2, t.AndroidJar} {
 		st, err := os.Stat(p)
 		if err != nil || st.IsDir() {
-			return nil, fmt.Errorf("缺少工具文件: %s（运行 guiapp doctor 检查发行包）", p)
+			return nil, fmt.Errorf("缺少工具文件: %s（运行 berba doctor 检查发行包）", p)
 		}
 	}
 	return t, nil

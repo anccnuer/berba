@@ -5,12 +5,12 @@ import (
 	"os"
 	"path/filepath"
 
-	"guiapp/internal/sign"
+	"berba/internal/sign"
 )
 
 func runKeygen(args []string) error {
 	fsFlags := newFlagSet("keygen", "生成 APK 签名密钥")
-	outPath := fsFlags.String("out", "", "密钥输出路径（默认 ./.guiapp/keys/release.pem）")
+	outPath := fsFlags.String("out", "", "密钥输出路径（默认 ./.berba/keys/release.pem）")
 	force := fsFlags.Bool("force", false, "覆盖已有密钥（会破坏升级链，谨慎使用）")
 	if err := parseArgs(fsFlags, args); err != nil {
 		return err
@@ -21,7 +21,7 @@ func runKeygen(args []string) error {
 		if err != nil {
 			return err
 		}
-		path = filepath.Join(cwd, ".guiapp", "keys", "release.pem")
+		path = filepath.Join(cwd, ".berba", "keys", "release.pem")
 	}
 	if _, err := os.Stat(path); err == nil && !*force {
 		key, err := sign.Load(path)

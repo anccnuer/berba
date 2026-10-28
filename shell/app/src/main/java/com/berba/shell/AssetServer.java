@@ -1,4 +1,4 @@
-package com.guiapp.shell;
+package com.berba.shell;
 
 import android.graphics.Bitmap;
 import android.net.Uri;
@@ -23,7 +23,7 @@ import java.util.Map;
  * https://appassets.androidhost/* -> assets/www/*，并注入 JS 桥。
  */
 final class AssetServer extends WebViewClient {
-    private static final String TAG = "guiapp";
+    private static final String TAG = "berba";
     private static final int MAX_ASSET = 64 * 1024 * 1024;
 
     private final MainActivity activity;

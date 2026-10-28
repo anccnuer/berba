@@ -1,4 +1,4 @@
-package com.guiapp.shell;
+package com.berba.shell;
 
 import android.app.Activity;
 import android.content.res.Resources;
@@ -15,7 +15,7 @@ import android.webkit.WebView;
  * 崩溃发生前 WebView 资源路径已经注册，因此刷新一次 Resources 后重建即可通过。
  */
 final class WebViewGuard {
-    private static final String TAG = "guiapp";
+    private static final String TAG = "berba";
     private static final String REDIRECT_ERROR = "failed to redirect ResourcesImpl";
 
     private WebViewGuard() {

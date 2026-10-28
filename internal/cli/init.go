@@ -7,12 +7,12 @@ import (
 	"os"
 	"path/filepath"
 
-	"guiapp/internal/config"
-	"guiapp/templates"
+	"berba/internal/config"
+	"berba/templates"
 )
 
 func runInit(args []string) error {
-	fsFlags := newFlagSet("init", "创建 guiapp 项目脚手架")
+	fsFlags := newFlagSet("init", "创建 berba 项目脚手架")
 	name := fsFlags.String("name", "", "应用名称（默认 示例应用）")
 	pkg := fsFlags.String("package", "", "应用包名（默认 com.example.demo）")
 	force := fsFlags.Bool("force", false, "覆盖已存在的 app.json")
@@ -72,7 +72,7 @@ func runInit(args []string) error {
 		}
 	}
 
-	fmt.Fprintf(out, "已创建项目: %s\n\n下一步:\n  cd %s\n  guiapp build\n", abs, relPath(".", abs))
+	fmt.Fprintf(out, "已创建项目: %s\n\n下一步:\n  cd %s\n  berba build\n", abs, relPath(".", abs))
 	return nil
 }
 

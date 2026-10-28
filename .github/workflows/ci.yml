@@ -46,19 +46,19 @@ jobs:
           set -euo pipefail
           DIST="$RUNNER_TEMP/dist"
           mkdir -p "$DIST/tools"
-          go build -trimpath -ldflags "-s -w -X main.version=0.0.0-ci" -o "$DIST/guiapp" ./cmd/guiapp
+          go build -trimpath -ldflags "-s -w -X main.version=0.0.0-ci" -o "$DIST/berba" ./cmd/berba
           cp "$ANDROID_SDK_ROOT/platforms/android-35/android.jar" "$DIST/tools/android.jar"
           BT="$(ls -1 "$ANDROID_SDK_ROOT/build-tools" | sort -V | tail -1)"
           cp "$ANDROID_SDK_ROOT/build-tools/$BT/aapt2" "$DIST/tools/aapt2"
 
       - name: Doctor
         run: |
-          "$RUNNER_TEMP/dist/guiapp" doctor --home "$RUNNER_TEMP/dist"
+          "$RUNNER_TEMP/dist/berba" doctor --home "$RUNNER_TEMP/dist"
 
       - name: Build example APK
         run: |
-          "$RUNNER_TEMP/dist/guiapp" init "$RUNNER_TEMP/hello" --package com.example.ci --name "CI 示例"
-          "$RUNNER_TEMP/dist/guiapp" build "$RUNNER_TEMP/hello" --home "$RUNNER_TEMP/dist"
+          "$RUNNER_TEMP/dist/berba" init "$RUNNER_TEMP/hello" --package com.example.ci --name "CI 示例"
+          "$RUNNER_TEMP/dist/berba" build "$RUNNER_TEMP/hello" --home "$RUNNER_TEMP/dist"
 
       - name: Verify APK
         run: |

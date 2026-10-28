@@ -91,7 +91,7 @@ end)
 
 ### `bridge.emit(name, data)`
 
-向页面推送事件，对应 JS 的 `guiapp.on(name, fn)`。
+向页面推送事件，对应 JS 的 `berba.on(name, fn)`。
 
 ```lua
 bridge.emit("tick", { count = 3, source = "lua" })
@@ -122,7 +122,7 @@ end)
 | `body` | string | 响应文本，最大 8MB |
 | `error` | string | 仅失败时存在 |
 
-连接/读取超时 15 秒，自动跟随重定向，User-Agent 为 `guiapp`。明文 HTTP 需要 manifest 允许 cleartext。
+连接/读取超时 15 秒，自动跟随重定向，User-Agent 为 `berba`。明文 HTTP 需要 manifest 允许 cleartext。
 
 ## file
 
@@ -211,27 +211,27 @@ device.orientation("landscape")
 ```lua
 local text = json.encode({ a = 1 })   -- '{"a":1}'
 local t, err = json.decode(text)       -- 失败返回 nil, 错误信息
-log("任意", "参数", 123)                -- 输出到 Logcat，tag = guiapp
+log("任意", "参数", 123)                -- 输出到 Logcat，tag = berba
 ```
 
 JSON 与 Lua 表的转换规则：键为 `1..n` 连续整数的表编码为数组，其余编码为对象；`nil` 为 `null`。函数、userdata 等无法编码的值会报错。
 
 ## JS 侧接口
 
-每个页面加载时注入 shim，暴露 `window.guiapp`：
+每个页面加载时注入 shim，暴露 `window.berba`：
 
 ```js
-const res = await window.guiapp.call('add', { a: 1, b: 2 });
+const res = await window.berba.call('add', { a: 1, b: 2 });
 console.log(res.sum);
 
 function onTick(data) { console.log(data.at); }
-window.guiapp.on('tick', onTick);
-window.guiapp.off('tick', onTick);
+window.berba.on('tick', onTick);
+window.berba.off('tick', onTick);
 ```
 
-- `guiapp.call(name, args)` 返回 Promise；Lua 抛错或方法不存在时 reject。
-- `guiapp.on(name, fn)` 订阅 Lua `bridge.emit` 的事件，返回该函数便于取消。
+- `berba.call(name, args)` 返回 Promise；Lua 抛错或方法不存在时 reject。
+- `berba.on(name, fn)` 订阅 Lua `bridge.emit` 的事件，返回该函数便于取消。
 - 每次启动生成随机 token，桥调用必须携带正确 token 且当前页面 origin 在白名单内。
 - 只有本地页面与 `allowedOrigins` 中的远程页面可以调用桥；未授权调用会被静默拒绝，Promise 不会完成。
 
-shim 的注入方式：本地 HTML 响应会在 `<head>` 前插入脚本标签（`https://appassets.androidhost/__guiapp.js`）；所有白名单页面在 `onPageStarted` 时还会再注入一次内联脚本。页面无需手动引入 shim，也无法通过其他 origin 获得可用 token。
+shim 的注入方式：本地 HTML 响应会在 `<head>` 前插入脚本标签（`https://appassets.androidhost/__berba.js`）；所有白名单页面在 `onPageStarted` 时还会再注入一次内联脚本。页面无需手动引入 shim，也无法通过其他 origin 获得可用 token。

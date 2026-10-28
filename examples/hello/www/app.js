@@ -3,7 +3,7 @@ const out = document.getElementById('out');
 async function call(name, args) {
   out.textContent = '调用中…';
   try {
-    const res = await window.guiapp.call(name, args);
+    const res = await window.berba.call(name, args);
     out.textContent = JSON.stringify(res, null, 2);
     return res;
   } catch (err) {
@@ -22,5 +22,5 @@ document.getElementById('device').addEventListener('click', () => {
 
 document.getElementById('increment').addEventListener('click', async () => {
   const res = await call('increment', {});
-  if (res) document.title = 'Hello guiapp (' + res.count + ')';
+  if (res) document.title = 'Hello berba (' + res.count + ')';
 });

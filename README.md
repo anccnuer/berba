@@ -1,6 +1,6 @@
-# guiapp
+# berba
 
-把前端页面和 Lua 逻辑打包成可安装的 Android APK。终端用户无需安装 JDK、Android SDK 或 Android Studio：解压发行包，运行 `guiapp build` 即可。
+把前端页面和 Lua 逻辑打包成可安装的 Android APK。终端用户无需安装 JDK、Android SDK 或 Android Studio：解压发行包，运行 `berba build` 即可。
 
 - WebView 承载 `www/` 下的页面（本地虚拟域名或远程 URL）
 - Lua 沙箱提供应用生命周期、网络、文件、存储、权限等白名单 API
@@ -13,24 +13,24 @@
 1. 解压发行包，确认工具链完整：
 
    ```bat
-   guiapp.exe doctor
+   berba.exe doctor
    ```
 
 2. 创建项目并构建：
 
    ```bat
-   guiapp.exe init myapp --package com.example.myapp
+   berba.exe init myapp --package com.example.myapp
    cd myapp
-   ..\guiapp.exe build
+   ..\berba.exe build
    ```
 
 3. 产物在 `myapp\dist\com.example.myapp-1.0.0.apk`。拷贝到手机安装，或：
 
    ```bat
-   ..\guiapp.exe install
+   ..\berba.exe install
    ```
 
-`build` 首次运行会在 `.guiapp\keys\release.pem` 生成签名密钥。**请离线备份**：它是应用身份，丢失后无法覆盖升级。
+`build` 首次运行会在 `.berba\keys\release.pem` 生成签名密钥。**请离线备份**：它是应用身份，丢失后无法覆盖升级。
 
 ## 示例
 
@@ -39,21 +39,21 @@
 
 ```bat
 cd examples\led-banner
-..\..\dist\windows-amd64\guiapp.exe build
+..\..\dist\windows-amd64\berba.exe build
 ```
 
 ## 命令
 
 | 命令 | 说明 |
 | --- | --- |
-| `guiapp init [目录]` | 创建脚手架，支持 `--name`、`--package`、`--force` |
-| `guiapp build [目录]` | 构建 APK，支持 `--debug`、`--out`、`--home`、`--config` |
-| `guiapp keygen` | 生成签名密钥，支持 `--out`、`--force` |
-| `guiapp doctor` | 校验工具链、payload 与文件哈希 |
-| `guiapp install [apk]` | 通过 adb 安装，支持 `--device`、`--adb` |
-| `guiapp version` | 显示版本 |
+| `berba init [目录]` | 创建脚手架，支持 `--name`、`--package`、`--force` |
+| `berba build [目录]` | 构建 APK，支持 `--debug`、`--out`、`--home`、`--config` |
+| `berba keygen` | 生成签名密钥，支持 `--out`、`--force` |
+| `berba doctor` | 校验工具链、payload 与文件哈希 |
+| `berba install [apk]` | 通过 adb 安装，支持 `--device`、`--adb` |
+| `berba version` | 显示版本 |
 
-发行包根目录默认是 exe 所在目录，也可用 `--home <目录>` 或环境变量 `GUIAPP_HOME` 覆盖。
+发行包根目录默认是 exe 所在目录，也可用 `--home <目录>` 或环境变量 `BERBA_HOME` 覆盖。
 
 ## 项目结构
 
@@ -63,7 +63,7 @@ myapp/
   icon.png          可选，图标（PNG/JPG，建议 512x512）
   www/              前端页面
   lua/              Lua 逻辑，默认入口 main.lua
-  .guiapp/          构建中间文件与签名密钥（不要提交）
+  .berba/          构建中间文件与签名密钥（不要提交）
   dist/             构建产物
 ```
 
@@ -72,8 +72,8 @@ myapp/
 ## 发行包结构
 
 ```
-guiapp-<ver>-windows-amd64/
-  guiapp.exe
+berba-<ver>-windows-amd64/
+  berba.exe
   payload/classes.dex     Android shell（含 LuaJ + org.json）
   tools/aapt2.exe
   tools/android.jar       platform 35

@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"guiapp/internal/apk"
+	"berba/internal/apk"
 )
 
 func testAPK(t *testing.T) []byte {
@@ -37,7 +37,7 @@ func TestSignAndVerify(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Certificate == nil || res.Certificate.Subject.CommonName != "guiapp" {
+	if res.Certificate == nil || res.Certificate.Subject.CommonName != "berba" {
 		t.Fatal("unexpected certificate")
 	}
 	if len(res.ContentDigest) != 32 {

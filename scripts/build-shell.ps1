@@ -85,15 +85,15 @@ $sources = Get-ChildItem -LiteralPath $Src -Recurse -Filter *.java | ForEach-Obj
 if ($LASTEXITCODE -ne 0) { Die "javac 失败 (exit $LASTEXITCODE)" }
 
 Write-Host "==> Lua 沙箱冒烟测试"
-$TestSrc = Join-Path $Root "shell\app\src\test\java\com\guiapp\shell\LuaSandboxTest.java"
+$TestSrc = Join-Path $Root "shell\app\src\test\java\com\berba\shell\LuaSandboxTest.java"
 if (Test-Path -LiteralPath $TestSrc) {
     $TestClasses = Join-Path $Work "test-classes"
     if (Test-Path -LiteralPath $TestClasses) { Remove-Item -LiteralPath $TestClasses -Recurse -Force }
     New-Item -ItemType Directory -Force -Path $TestClasses | Out-Null
     & $Javac --release 17 -encoding UTF-8 -cp $Luaj -d $TestClasses `
-        (Join-Path $Src "com\guiapp\shell\LuaSandbox.java") $TestSrc
+        (Join-Path $Src "com\berba\shell\LuaSandbox.java") $TestSrc
     if ($LASTEXITCODE -ne 0) { Die "沙箱测试编译失败 (exit $LASTEXITCODE)" }
-    & $Java -cp "$TestClasses;$Luaj" com.guiapp.shell.LuaSandboxTest
+    & $Java -cp "$TestClasses;$Luaj" com.berba.shell.LuaSandboxTest
     if ($LASTEXITCODE -ne 0) { Die "Lua 沙箱冒烟测试失败 (exit $LASTEXITCODE)" }
 }
 

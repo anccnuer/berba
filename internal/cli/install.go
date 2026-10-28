@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"sort"
 
-	"guiapp/internal/aapt2"
-	"guiapp/internal/payload"
+	"berba/internal/aapt2"
+	"berba/internal/payload"
 )
 
 func locateAapt2(layout *payload.Layout) (*aapt2.Tool, error) {
@@ -18,7 +18,7 @@ func locateAapt2(layout *payload.Layout) (*aapt2.Tool, error) {
 func runInstall(args []string) error {
 	fsFlags := newFlagSet("install", "使用 adb 安装 APK")
 	device := fsFlags.String("device", "", "指定设备序列号")
-	adbPath := fsFlags.String("adb", "", "adb 路径（默认 PATH 或 GUIAPP_ADB）")
+	adbPath := fsFlags.String("adb", "", "adb 路径（默认 PATH 或 BERBA_ADB）")
 	apkPath := fsFlags.String("apk", "", "APK 路径（默认 dist/ 下最新的 APK）")
 	if err := parseArgs(fsFlags, args); err != nil {
 		return err
@@ -31,7 +31,7 @@ func runInstall(args []string) error {
 	if apk == "" {
 		matches, _ := filepath.Glob(filepath.Join("dist", "*.apk"))
 		if len(matches) == 0 {
-			return fmt.Errorf("未找到 APK，请先运行 guiapp build 或指定路径")
+			return fmt.Errorf("未找到 APK，请先运行 berba build 或指定路径")
 		}
 		sort.Slice(matches, func(i, j int) bool {
 			si, errI := os.Stat(matches[i])
@@ -49,14 +49,14 @@ func runInstall(args []string) error {
 
 	adb := *adbPath
 	if adb == "" {
-		adb = os.Getenv("GUIAPP_ADB")
+		adb = os.Getenv("BERBA_ADB")
 	}
 	if adb == "" {
 		adb, _ = exec.LookPath("adb")
 	}
 	if adb == "" {
 		fmt.Fprintln(out, "未找到 adb，已跳过安装。")
-		fmt.Fprintln(out, "请将 adb 加入 PATH，或设置 GUIAPP_ADB，或使用 --adb 指定。")
+		fmt.Fprintln(out, "请将 adb 加入 PATH，或设置 BERBA_ADB，或使用 --adb 指定。")
 		fmt.Fprintf(out, "APK 已就绪: %s\n", apk)
 		return nil
 	}

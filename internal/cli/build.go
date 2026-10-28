@@ -9,13 +9,13 @@ import (
 	"strconv"
 	"strings"
 
-	"guiapp/internal/aapt2"
-	"guiapp/internal/apk"
-	"guiapp/internal/config"
-	"guiapp/internal/manifest"
-	"guiapp/internal/payload"
-	"guiapp/internal/resources"
-	"guiapp/internal/sign"
+	"berba/internal/aapt2"
+	"berba/internal/apk"
+	"berba/internal/config"
+	"berba/internal/manifest"
+	"berba/internal/payload"
+	"berba/internal/resources"
+	"berba/internal/sign"
 )
 
 func runBuild(args []string) error {
@@ -60,7 +60,7 @@ func runBuild(args []string) error {
 		return err
 	}
 
-	buildDir := filepath.Join(proj.Root, ".guiapp", "build")
+	buildDir := filepath.Join(proj.Root, ".berba", "build")
 	resDir := filepath.Join(buildDir, "res")
 	if err := os.RemoveAll(buildDir); err != nil {
 		return err
@@ -112,7 +112,7 @@ func runBuild(args []string) error {
 		return err
 	}
 
-	keyPath := filepath.Join(proj.Root, ".guiapp", "keys", "release.pem")
+	keyPath := filepath.Join(proj.Root, ".berba", "keys", "release.pem")
 	key, created, err := sign.LoadOrCreate(keyPath)
 	if err != nil {
 		return err
@@ -168,7 +168,7 @@ func runBuild(args []string) error {
 	if isDebug {
 		fmt.Fprintln(out, "  模式:   debug")
 	}
-	fmt.Fprintf(out, "\n安装: guiapp install %s\n", apkPath)
+	fmt.Fprintf(out, "\n安装: berba install %s\n", apkPath)
 	return nil
 }
 

@@ -1,4 +1,4 @@
-package com.guiapp.shell;
+package com.berba.shell;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
@@ -48,8 +48,8 @@ import java.util.concurrent.atomic.AtomicReference;
  * APK 宿主 Activity：代码构建 WebView，加载 assets/www，启动 Lua 运行时。
  */
 public class MainActivity extends Activity {
-    private static final String TAG = "guiapp";
-    private static final String PREFS = "guiapp";
+    private static final String TAG = "berba";
+    private static final String PREFS = "berba";
 
     private AppConfig config;
     private WebView webView;
@@ -406,7 +406,7 @@ public class MainActivity extends Activity {
             if (webView == null) {
                 return;
             }
-            String js = "window.__guiappResolve(" + JSONObject.quote(reqId) + ","
+            String js = "window.__berbaResolve(" + JSONObject.quote(reqId) + ","
                     + (ok ? "true" : "false") + ","
                     + JSONObject.quote(payload == null ? "null" : payload) + ");";
             webView.evaluateJavascript(js, null);

@@ -6,7 +6,7 @@ import (
 	"html"
 	"text/template"
 
-	"guiapp/internal/config"
+	"berba/internal/config"
 )
 
 const minSDK = 24
@@ -48,7 +48,7 @@ const manifestTemplate = `<manifest xmlns:android="http://schemas.android.com/ap
         android:enableOnBackInvokedCallback="true"{{if .Debuggable}}
         android:debuggable="true"{{end}}>
         <activity
-            android:name="com.guiapp.shell.MainActivity"
+            android:name="com.berba.shell.MainActivity"
             android:exported="true"{{if .ScreenOrientation}}
             android:screenOrientation="{{.ScreenOrientation}}"{{end}}
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode"

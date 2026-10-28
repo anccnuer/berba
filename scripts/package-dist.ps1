@@ -2,7 +2,7 @@
 # 需在本机安装 Android SDK（platform 35 + build-tools）与 JDK 17+。
 #
 # 用法: scripts\package-dist.ps1 [-Version 0.1.0] [-Sdk C:\Android\Sdk]
-# 产物: dist\windows-amd64\ 与 dist\guiapp-<版本>-windows-amd64.zip
+# 产物: dist\windows-amd64\ 与 dist\berba-<版本>-windows-amd64.zip
 param(
     [string]$Version = "0.1.0",
     [string]$Sdk = "",
@@ -46,16 +46,16 @@ $Aapt2 = Join-Path $Sdk "build-tools\$BuildTools\aapt2.exe"
 if (-not (Test-Path -LiteralPath $Aapt2)) { Die "找不到 $Aapt2" }
 
 $Stage = Join-Path $OutDir "windows-amd64"
-$Zip = Join-Path $OutDir "guiapp-$Version-windows-amd64.zip"
+$Zip = Join-Path $OutDir "berba-$Version-windows-amd64.zip"
 
 Write-Host "==> 清理 $Stage"
 if (Test-Path -LiteralPath $Stage) { Remove-Item -LiteralPath $Stage -Recurse -Force }
 New-Item -ItemType Directory -Force -Path (Join-Path $Stage "tools"), (Join-Path $Stage "payload") | Out-Null
 
-Write-Host "==> 构建 guiapp.exe ($Version)"
+Write-Host "==> 构建 berba.exe ($Version)"
 Push-Location $Root
 try {
-    & go build -trimpath -ldflags "-s -w -X main.version=$Version" -o (Join-Path $Stage "guiapp.exe") ./cmd/guiapp
+    & go build -trimpath -ldflags "-s -w -X main.version=$Version" -o (Join-Path $Stage "berba.exe") ./cmd/berba
     if ($LASTEXITCODE -ne 0) { Die "go build 失败 (exit $LASTEXITCODE)" }
 } finally {
     Pop-Location
@@ -130,4 +130,4 @@ $sizeMB = [math]::Round((Get-Item -LiteralPath $Zip).Length / 1MB, 1)
 Write-Host ""
 Write-Host "完成: $Zip ($sizeMB MB)"
 Write-Host "SHA256: $zipHash"
-Write-Host "解压后运行: guiapp.exe doctor"
+Write-Host "解压后运行: berba.exe doctor"

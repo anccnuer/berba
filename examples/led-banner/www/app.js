@@ -55,10 +55,10 @@
   }
 
   function call(name, args) {
-    if (!window.guiapp || typeof window.guiapp.call !== 'function') {
+    if (!window.berba || typeof window.berba.call !== 'function') {
       return Promise.reject(new Error('桥接不可用'));
     }
-    return window.guiapp.call(name, args);
+    return window.berba.call(name, args);
   }
 
   function numberOr(value, fallback) {
@@ -304,8 +304,8 @@
       setTimeout(reflow, 150);
     });
 
-    if (window.guiapp && typeof window.guiapp.on === 'function') {
-      window.guiapp.on('bannerExit', hideBanner);
+    if (window.berba && typeof window.berba.on === 'function') {
+      window.berba.on('bannerExit', hideBanner);
     }
   }
 
@@ -316,7 +316,7 @@
     syncForm();
     renderPreview();
 
-    if (!window.guiapp) {
+    if (!window.berba) {
       return;
     }
     call('getSettings', {}).then(function (saved) {

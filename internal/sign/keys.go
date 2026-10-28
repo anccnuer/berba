@@ -37,12 +37,12 @@ func Generate(path string) (*Key, error) {
 	tmpl := &x509.Certificate{
 		SerialNumber: serial,
 		Subject: pkix.Name{
-			CommonName:   "guiapp",
-			Organization: []string{"guiapp"},
+			CommonName:   "berba",
+			Organization: []string{"berba"},
 		},
 		Issuer: pkix.Name{
-			CommonName:   "guiapp",
-			Organization: []string{"guiapp"},
+			CommonName:   "berba",
+			Organization: []string{"berba"},
 		},
 		NotBefore:             now.Add(-time.Hour),
 		NotAfter:              now.AddDate(30, 0, 0),

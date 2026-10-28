@@ -45,7 +45,7 @@ AAPT2="$SDK/build-tools/$BUILD_TOOLS/aapt2"
 
 EXE=""
 [ "$TARGET_OS" = "windows" ] && EXE=".exe"
-NAME="guiapp-$VERSION-$TARGET_OS-$TARGET_ARCH"
+NAME="berba-$VERSION-$TARGET_OS-$TARGET_ARCH"
 STAGE="$OUTDIR/$TARGET_OS-$TARGET_ARCH"
 ZIP="$OUTDIR/$NAME.zip"
 
@@ -92,10 +92,10 @@ echo "==> 清理 $STAGE"
 rm -rf "$STAGE"
 mkdir -p "$STAGE/tools" "$STAGE/payload"
 
-echo "==> 构建 guiapp$EXE ($VERSION)"
+echo "==> 构建 berba$EXE ($VERSION)"
 (cd "$ROOT" && CGO_ENABLED=0 GOOS="$TARGET_OS" GOARCH="$TARGET_ARCH" \
   go build -trimpath -ldflags "-s -w -X main.version=$VERSION" \
-  -o "$STAGE/guiapp$EXE" ./cmd/guiapp)
+  -o "$STAGE/berba$EXE" ./cmd/berba)
 
 echo "==> 复制工具链"
 cp "$AAPT2" "$STAGE/tools/$(basename "$AAPT2")"
@@ -137,4 +137,4 @@ make_zip "$STAGE" "$ZIP"
 echo ""
 echo "完成: $ZIP ($(du -h "$ZIP" | awk '{print $1}'))"
 echo "SHA256: $(hash_file "$ZIP")"
-echo "解压后运行: guiapp$EXE doctor"
+echo "解压后运行: berba$EXE doctor"

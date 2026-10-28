@@ -1,4 +1,4 @@
-package com.guiapp.shell;
+package com.berba.shell;
 
 import org.json.JSONArray;
 import org.json.JSONObject;

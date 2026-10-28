@@ -1,4 +1,4 @@
-package com.guiapp.shell;
+package com.berba.shell;
 
 import android.os.Handler;
 import android.os.HandlerThread;
@@ -28,7 +28,7 @@ import java.util.concurrent.Executors;
  * Lua 沙箱运行时：单工作线程，白名单库，所有回调在本线程执行。
  */
 final class LuaRuntime {
-    private static final String TAG = "guiapp";
+    private static final String TAG = "berba";
     private static final Set<String> APP_EVENTS = new HashSet<>();
     private static final Set<String> WEB_EVENTS = new HashSet<>();
 
@@ -60,7 +60,7 @@ final class LuaRuntime {
     LuaRuntime(MainActivity activity, AppConfig config) {
         this.activity = activity;
         this.config = config;
-        this.thread = new HandlerThread("guiapp-lua");
+        this.thread = new HandlerThread("berba-lua");
     }
 
     MainActivity activity() {
@@ -295,7 +295,7 @@ final class LuaRuntime {
 
     void emitToJs(String name, String payloadJson) {
         activity.runOnUiThread(() -> activity.evaluateJs(
-                "window.__guiappEvent(" + org.json.JSONObject.quote(name) + ","
+                "window.__berbaEvent(" + org.json.JSONObject.quote(name) + ","
                         + org.json.JSONObject.quote(payloadJson == null ? "null" : payloadJson) + ");",
                 null));
     }

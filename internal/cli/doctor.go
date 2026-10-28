@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"guiapp/internal/payload"
+	"berba/internal/payload"
 )
 
 func runDoctor(args []string) error {
@@ -44,7 +44,7 @@ func runDoctor(args []string) error {
 
 	if layout.Versions != "" {
 		if vf, err := payload.ReadVersions(layout.Versions); err == nil {
-			fmt.Fprintf(out, "  版本清单: guiapp %s\n", vf.Version)
+			fmt.Fprintf(out, "  版本清单: berba %s\n", vf.Version)
 			for _, item := range []struct {
 				label string
 				path  string

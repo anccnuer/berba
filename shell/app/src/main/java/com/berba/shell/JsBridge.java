@@ -1,4 +1,4 @@
-package com.guiapp.shell;
+package com.berba.shell;
 
 import android.util.Log;
 import android.webkit.JavascriptInterface;
@@ -13,9 +13,9 @@ import java.security.SecureRandom;
  * JS -> Lua 桥。每次启动生成随机 token，仅允许白名单 origin 调用。
  */
 public final class JsBridge {
-    static final String NAME = "__guiappNative";
-    static final String SHIM_PATH = "__guiapp.js";
-    private static final String TAG = "guiapp";
+    static final String NAME = "__berbaNative";
+    static final String SHIM_PATH = "__berba.js";
+    private static final String TAG = "berba";
     private static final int MAX_ARGS = 1024 * 1024;
 
     private final MainActivity activity;
@@ -73,17 +73,17 @@ public final class JsBridge {
     String shim() {
         String t = JSONObject.quote(token);
         return "(function(){"
-                + "if(window.guiapp&&window.guiapp.__guiapp){return;}"
-                + "var callbacks={},events={},seq=0,native=window.__guiappNative;"
-                + "window.__guiappResolve=function(id,ok,payload){"
+                + "if(window.berba&&window.berba.__berba){return;}"
+                + "var callbacks={},events={},seq=0,native=window.__berbaNative;"
+                + "window.__berbaResolve=function(id,ok,payload){"
                 + "var e=callbacks[id];if(!e){return;}delete callbacks[id];"
                 + "var v;try{v=JSON.parse(payload);}catch(x){v=payload;}"
                 + "if(ok){e.resolve(v);}else{e.reject(new Error(typeof v==='string'?v:(v&&v.error)||'调用失败'));}};"
-                + "window.__guiappEvent=function(name,payload){"
+                + "window.__berbaEvent=function(name,payload){"
                 + "var list=events[name];if(!list){return;}"
                 + "var v;try{v=JSON.parse(payload);}catch(x){v=payload;}"
                 + "for(var i=0;i<list.length;i++){try{list[i](v);}catch(e){console.error(e);}}};"
-                + "window.guiapp={__guiapp:true,token:" + t + ","
+                + "window.berba={__berba:true,token:" + t + ","
                 + "call:function(name,args){return new Promise(function(resolve,reject){"
                 + "var id=String(++seq);callbacks[id]={resolve:resolve,reject:reject};"
                 + "try{native.dispatch(id," + t + ",String(name),JSON.stringify(args===undefined?null:args),String(location.origin));}"

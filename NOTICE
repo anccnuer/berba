@@ -1,5 +1,5 @@
-guiapp
-Copyright (c) 2026 guiapp contributors
+berba
+Copyright (c) 2026 berba contributors
 
 This distribution includes third-party components. Their licenses and
 attributions are listed below. The Android SDK components (aapt2 and
@@ -68,7 +68,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ----------------------------------------------------------------------------
-Go standard library (linked into guiapp.exe)
+Go standard library (linked into berba.exe)
 ----------------------------------------------------------------------------
 Copyright (c) The Go Authors. All rights reserved.
 

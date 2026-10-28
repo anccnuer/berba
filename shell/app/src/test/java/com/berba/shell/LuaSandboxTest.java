@@ -1,4 +1,4 @@
-package com.guiapp.shell;
+package com.berba.shell;
 
 import org.luaj.vm2.Globals;
 import org.luaj.vm2.LuaTable;

@@ -43,7 +43,7 @@ base, table, string, math, coroutine, bit32
 
 ## JS ↔ Lua 桥
 
-- 桥对象名 `__guiappNative`，方法签名 `dispatch(reqId, token, name, argsJson, origin)`。
+- 桥对象名 `__berbaNative`，方法签名 `dispatch(reqId, token, name, argsJson, origin)`。
 - **每次启动**用 `SecureRandom` 生成 128 位 token，并注入到页面 shim；token 比较使用 `MessageDigest.isEqual`（常量时间）。
 - **origin 白名单**：本地 origin 始终允许；远程 origin 必须写入 `web.allowedOrigins`。未授权调用直接丢弃，不返回错误细节。
 - 参数上限 1MB；桥方法名长度上限 128（注册时校验）。
@@ -71,7 +71,7 @@ base, table, string, math, coroutine, bit32
 
 - v2 签名覆盖 ZIP 条目、Central Directory 与 EOCD；构建结束会本地验签，并用 `aapt2 dump badging` 校验包名/版本。
 - 自签证书只证明“同一密钥签发的更新”，不提供公开信任链；侧载/企业分发场景适用。
-- 私钥文件权限 `0600`，位于 `.guiapp/keys/`，已被 `.gitignore` 忽略。泄露私钥等于允许他人发布可覆盖升级的更新。
+- 私钥文件权限 `0600`，位于 `.berba/keys/`，已被 `.gitignore` 忽略。泄露私钥等于允许他人发布可覆盖升级的更新。
 - 发行包中的 `aapt2` 与 `android.jar` 来自 Android SDK，受 SDK 许可约束；不要提交到公开仓库，对外分发前确认许可与 NOTICE。
 
 ## 已知限制

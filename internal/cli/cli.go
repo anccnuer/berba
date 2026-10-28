@@ -13,10 +13,10 @@ var (
 	errOut io.Writer = os.Stderr
 )
 
-const usageText = `guiapp - 把前端页面和 Lua 逻辑打包成 Android APK
+const usageText = `berba - 把前端页面和 Lua 逻辑打包成 Android APK
 
 用法:
-  guiapp <命令> [参数]
+  berba <命令> [参数]
 
 命令:
   init [目录]        创建项目脚手架（默认当前目录）
@@ -27,12 +27,12 @@ const usageText = `guiapp - 把前端页面和 Lua 逻辑打包成 Android APK
   version            显示版本
 
 全局参数:
-  --home <目录>      指定发行包根目录（默认 exe 所在目录，或环境变量 GUIAPP_HOME）
+  --home <目录>      指定发行包根目录（默认 exe 所在目录，或环境变量 BERBA_HOME）
 
 示例:
-  guiapp init myapp --package com.example.myapp
-  cd myapp && guiapp build
-  guiapp install
+  berba init myapp --package com.example.myapp
+  cd myapp && berba build
+  berba install
 `
 
 func Run(args []string, version string) int {
@@ -53,7 +53,7 @@ func Run(args []string, version string) int {
 	case "install":
 		err = runInstall(args[1:])
 	case "version", "--version", "-v":
-		fmt.Fprintf(out, "guiapp %s\n", version)
+		fmt.Fprintf(out, "berba %s\n", version)
 		return 0
 	case "help", "--help", "-h":
 		fmt.Fprint(out, usageText)
@@ -77,7 +77,7 @@ func newFlagSet(name, summary string) *flag.FlagSet {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(errOut)
 	fs.Usage = func() {
-		fmt.Fprintf(errOut, "%s\n\n用法: guiapp %s [参数]\n\n参数:\n", summary, name)
+		fmt.Fprintf(errOut, "%s\n\n用法: berba %s [参数]\n\n参数:\n", summary, name)
 		fs.PrintDefaults()
 	}
 	return fs

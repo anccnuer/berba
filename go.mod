@@ -1,3 +1,3 @@
-module guiapp
+module berba
 
 go 1.24

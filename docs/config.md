@@ -1,6 +1,6 @@
 # app.json 配置
 
-`app.json` 位于项目根目录。`guiapp init` 会生成一份可运行的默认配置。
+`app.json` 位于项目根目录。`berba init` 会生成一份可运行的默认配置。
 
 ```json
 {
@@ -47,7 +47,7 @@
 | `lua.entry` | string | `main.lua` | Lua 入口，相对 `lua.dir` |
 | `debug` | bool | `false` | 开启 WebView 远程调试与 `android:debuggable` |
 
-也可以构建时用 `guiapp build --debug` 临时开启调试，无需修改配置。
+也可以构建时用 `berba build --debug` 临时开启调试，无需修改配置。
 
 ## 包名
 
@@ -117,6 +117,6 @@
 
 ## Lua
 
-若 `lua.dir` 存在且入口文件可读，构建时会把整个目录写入 APK 的 `assets/lua/`，并启用 Lua 运行时。没有 Lua 目录时应用照常启动，只是 `window.guiapp.call` 会返回“未注册的桥接方法”。
+若 `lua.dir` 存在且入口文件可读，构建时会把整个目录写入 APK 的 `assets/lua/`，并启用 Lua 运行时。没有 Lua 目录时应用照常启动，只是 `window.berba.call` 会返回“未注册的桥接方法”。
 
 `lua.entry` 与 `require` 的路径都会被规范化，禁止通过 `../` 越出 `lua.dir`。

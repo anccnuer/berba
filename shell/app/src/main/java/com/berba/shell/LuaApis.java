@@ -1,4 +1,4 @@
-package com.guiapp.shell;
+package com.berba.shell;
 
 import android.os.Build;
 import android.util.DisplayMetrics;
@@ -29,7 +29,7 @@ import java.util.Locale;
 
 /** 白名单 Lua API 的安装入口。 */
 final class LuaApis {
-    private static final String TAG = "guiapp";
+    private static final String TAG = "berba";
     private static final int HTTP_TIMEOUT_MS = 15000;
     private static final int MAX_HTTP_BODY = 8 * 1024 * 1024;
     private static final long MAX_FILE_SIZE = 8L * 1024 * 1024;
@@ -229,7 +229,7 @@ final class LuaApis {
             conn.setReadTimeout(HTTP_TIMEOUT_MS);
             conn.setInstanceFollowRedirects(true);
             conn.setRequestProperty("Accept", "*/*");
-            conn.setRequestProperty("User-Agent", "guiapp");
+            conn.setRequestProperty("User-Agent", "berba");
             if ("POST".equals(method)) {
                 conn.setDoOutput(true);
                 String trimmed = body == null ? "" : body.trim();
