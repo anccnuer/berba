@@ -18,6 +18,7 @@ import (
 	"berba/internal/config"
 	"berba/internal/manifest"
 	"berba/internal/payload"
+	"berba/internal/publish"
 	"berba/internal/resources"
 	"berba/internal/sign"
 )
@@ -273,14 +274,8 @@ func Publish(distDir, fileName string, data []byte, verify func(tmpPath string) 
 		return "", err
 	}
 	finalPath := filepath.Join(distDir, fileName)
-	if err := os.Rename(tmpPath, finalPath); err != nil {
-		// Windows 不允许 rename 覆盖已存在文件。
-		if removeErr := os.Remove(finalPath); removeErr != nil && !os.IsNotExist(removeErr) {
-			return "", err
-		}
-		if err := os.Rename(tmpPath, finalPath); err != nil {
-			return "", err
-		}
+	if err := publish.RenameOver(tmpPath, finalPath); err != nil {
+		return "", err
 	}
 	return finalPath, nil
 }

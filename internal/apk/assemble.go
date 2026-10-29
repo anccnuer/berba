@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"berba/internal/fswalk"
 )
 
 const (
@@ -96,25 +98,12 @@ func Assemble(baseAPK string, extra []Entry) ([]byte, error) {
 // DirEntries 递归收集目录下的文件，目标名前缀为 prefix。
 func DirEntries(root, prefix string) ([]Entry, error) {
 	var entries []Entry
-	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+	err := fswalk.Files(root, func(relSlash, absPath string) error {
+		data, err := os.ReadFile(absPath)
 		if err != nil {
 			return err
 		}
-		if d.IsDir() {
-			return nil
-		}
-		if d.Type()&os.ModeSymlink != 0 {
-			return fmt.Errorf("不允许符号链接: %s", p)
-		}
-		rel, err := filepath.Rel(root, p)
-		if err != nil {
-			return err
-		}
-		data, err := os.ReadFile(p)
-		if err != nil {
-			return err
-		}
-		name := path.Join(prefix, filepath.ToSlash(rel))
+		name := path.Join(prefix, relSlash)
 		entries = append(entries, Entry{Name: name, Data: data})
 		return nil
 	})

@@ -17,7 +17,9 @@ import (
 	"time"
 
 	"berba/internal/aapt2"
+	"berba/internal/fswalk"
 	"berba/internal/payload"
+	"berba/internal/publish"
 )
 
 // Options 是发行包的全部输入。Home 应包含 berba 可执行文件、tools/ 与 payload/。
@@ -172,24 +174,10 @@ func copyDocs(srcRoot, dstRoot string) error {
 	}
 	docsDir := filepath.Join(srcRoot, "docs")
 	if st, err := os.Stat(docsDir); err == nil && st.IsDir() {
-		err := filepath.WalkDir(docsDir, func(p string, d os.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if d.Type()&os.ModeSymlink != 0 {
-				return fmt.Errorf("不允许符号链接: %s", p)
-			}
-			if d.IsDir() {
-				return nil
-			}
-			rel, err := filepath.Rel(srcRoot, p)
-			if err != nil {
-				return err
-			}
-			files = append(files, rel)
+		if err := fswalk.Files(docsDir, func(relSlash, absPath string) error {
+			files = append(files, filepath.Join("docs", filepath.FromSlash(relSlash)))
 			return nil
-		})
-		if err != nil {
+		}); err != nil {
 			return err
 		}
 	}
@@ -225,24 +213,10 @@ var zipEpoch = time.Date(1980, 1, 1, 0, 0, 0, 0, time.UTC)
 
 func writeZip(ctx context.Context, home, outDir, name string) (path, sum string, size int64, err error) {
 	var entries []string
-	err = filepath.WalkDir(home, func(p string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.Type()&os.ModeSymlink != 0 {
-			return fmt.Errorf("不允许符号链接: %s", p)
-		}
-		if d.IsDir() {
-			return nil
-		}
-		rel, err := filepath.Rel(home, p)
-		if err != nil {
-			return err
-		}
-		entries = append(entries, filepath.ToSlash(rel))
+	if err := fswalk.Files(home, func(relSlash, absPath string) error {
+		entries = append(entries, relSlash)
 		return nil
-	})
-	if err != nil {
+	}); err != nil {
 		return "", "", 0, err
 	}
 	sort.Strings(entries)
@@ -300,13 +274,8 @@ func writeZip(ctx context.Context, home, outDir, name string) (path, sum string,
 		return "", "", 0, err
 	}
 	final := filepath.Join(outDir, name)
-	if err := os.Rename(tmpPath, final); err != nil {
-		if removeErr := os.Remove(final); removeErr != nil && !os.IsNotExist(removeErr) {
-			return "", "", 0, err
-		}
-		if err := os.Rename(tmpPath, final); err != nil {
-			return "", "", 0, err
-		}
+	if err := publish.RenameOver(tmpPath, final); err != nil {
+		return "", "", 0, err
 	}
 	st, err := os.Stat(final)
 	if err != nil {

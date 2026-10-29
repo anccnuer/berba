@@ -141,9 +141,6 @@ func ThemeValue(theme string) string {
 	}
 }
 
-func MinSDK() int    { return minSDK }
-func TargetSDK() int { return targetSDK }
-
 func Validate(data []byte) error {
 	if !bytes.HasPrefix(bytes.TrimSpace(data), []byte("<manifest")) {
 		return fmt.Errorf("渲染结果异常: 不是有效的 manifest 文档")

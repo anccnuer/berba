@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"hash/crc32"
-	"os"
 	"sort"
 	"strings"
 )
@@ -196,14 +195,6 @@ func Build(entries []Entry) ([]byte, error) {
 	binary.LittleEndian.PutUint16(eocd[20:], 0)
 	out.Write(eocd[:])
 	return out.Bytes(), nil
-}
-
-func WriteFile(path string, entries []Entry) error {
-	data, err := Build(entries)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0o644)
 }
 
 func paddingFor(base uint64, align int) int {
