@@ -43,19 +43,45 @@ berba dev --open
 ```
 
 - 入口取自 `web.startUrl` 的路径，默认 `/index.html`；`web.spa` 为 true 时无扩展名路径回退到 `index.html`。
-- 所有 HTML 响应会在 `<head>` 后注入 `/__berba.js`，提供与壳一致的 `window.berba.call/on/off`。桥调用由 `dev/mock.js` 中的 `window.__berbaMock` 处理：
+- 所有 HTML 响应会在 `<head>` 后注入 `/__berba.js`，提供与壳一致的 `window.berba.call/on/off`。
+- 项目存在 `lua.entry` 时，shim 会自动加载 fengari 与浏览器 Lua 运行时，在页面里真实执行 `lua/main.lua`（含 `require`），`window.berba.call` 直接调用 `bridge.register` 注册的方法，`bridge.emit` 推送的事件也能被 `berba.on` 收到。调用优先级：`dev/mock.js` → Lua 运行时 → reject。
+- `dev/mock.js` 仍然可用，适合伪造设备专属能力（如真实相册、传感器）；显式 mock 会覆盖同名 Lua 方法：
 
   ```js
   // dev/mock.js
   window.__berbaMock = {
-    add: (req) => ({ sum: (req.a || 0) + (req.b || 0) }),
     "device.model": () => "dev-browser",
   };
   window.__berbaEmit && window.__berbaEmit("tick", { at: Date.now() });
   ```
 
-  未 mock 的方法会打印警告并 reject。mock 脚本不会进入 APK。
+  Lua 与 mock 都没有的方法会打印警告并 reject。mock 脚本不会进入 APK。
 - 参数：`--port`（默认 5173，0 表示随机）、`--host`、`--open`、`--mock <path>`（默认 `<项目>/dev/mock.js`）。
+
+### 浏览器 Lua 运行时的已知差异
+
+dev 运行时基于 fengari（Lua 5.3），设备壳是 LuaJ（Lua 5.2），且浏览器没有 Android 能力：
+
+| 能力 | 浏览器行为 |
+| --- | --- |
+| `app.info()` | `platform` 为 `"browser"`、`sdk` 为 `0`，其余取自 `app.json` |
+| `app.on("back")` | 浏览器无法拦截返回键，改为手动调用 `window.__berbaDev.back()`（返回是否已处理） |
+| `app.on("newIntent")` | 不触发 |
+| `pause` / `resume` | 绑定 `visibilitychange` |
+| `permission.*` | 一律视为已授权，仅方便调试 |
+| `store` / `file` | 落在 `localStorage`，清站点数据即清空；单文件仍限制 8MB |
+| `http.*` | 直连受浏览器 CORS 限制，跨域请求会失败；明文 `http://` 不拦截 |
+| `http.request` 的 `onProgress` | 用 `ReadableStream` 读取，取不到 `Content-Length` 时总长为 `-1` |
+| `ui.statusBar` | no-op（打印警告） |
+| `ui.fullscreen` | 调用 Fullscreen API，需要用户手势 |
+| `ui.keepScreenOn` | 使用 Wake Lock（仅 https 或 localhost 可用） |
+| `device.clipboard()` | 浏览器不允许同步读取，返回空串并警告；写入正常 |
+| `device.share` / `device.orientation` | 仅部分浏览器可用，失败时打印警告 |
+| `web.load` / `web.reload` | 直接导航，离开 dev 页面即断开桥 |
+| Lua 版本 | fengari 5.3，整数为 32 位；已补 `bit32`，`math.type` 等 5.3 特性与设备略有差异 |
+
+`--host 0.0.0.0` 会让局域网内其他设备访问到项目源码并可执行 Lua，仅在需要真机浏览器联调时使用，用完请改回默认的 `127.0.0.1`。
+
 
 `berba watch` 轮询项目文件（忽略 `.git`、`.berba`、`dist`、`node_modules` 等），稳定后自动重建：
 

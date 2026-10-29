@@ -1,8 +1,10 @@
 // Package devserver 在本地提供项目 www 目录的静态服务，并注入桥 mock。
+// 启用 Lua 时还会下发 fengari 与浏览器运行时，让 lua/main.lua 直接在页面里执行。
 package devserver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"mime"
@@ -13,7 +15,23 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"berba/internal/devserver/luaruntime"
+	"berba/internal/fswalk"
 )
+
+const (
+	luaFileLimit  = 1 << 20 // 单个 Lua 文件上限
+	luaTotalLimit = 8 << 20 // Lua 源码总量上限
+)
+
+// AppMeta 是页面内 app.info() 的元数据。
+type AppMeta struct {
+	Name        string
+	Package     string
+	VersionName string
+	VersionCode int
+}
 
 // Options 是开发服务器配置。
 type Options struct {
@@ -23,6 +41,10 @@ type Options struct {
 	MockJS string
 	Host   string
 	Port   int
+	// LuaRoot 非空时启用浏览器内 Lua 运行时，LuaEntry 为相对 LuaRoot 的入口文件。
+	LuaRoot  string
+	LuaEntry string
+	App      AppMeta
 }
 
 // Server 提供带 shim 注入的静态文件服务。
@@ -34,6 +56,11 @@ type Server struct {
 	host    string
 	port    int
 	handler http.Handler
+
+	luaRoot  string
+	luaEntry string
+	luaOn    bool
+	app      AppMeta
 }
 
 // New 校验目录并构建处理器。
@@ -65,6 +92,31 @@ func New(opts Options) (*Server, error) {
 		mock:  opts.MockJS,
 		host:  opts.Host,
 		port:  opts.Port,
+		app:   opts.App,
+	}
+	if opts.LuaRoot != "" {
+		luaRoot, err := filepath.Abs(opts.LuaRoot)
+		if err != nil {
+			return nil, err
+		}
+		info, err := os.Stat(luaRoot)
+		if err != nil {
+			return nil, fmt.Errorf("Lua 目录不可用: %w", err)
+		}
+		if !info.IsDir() {
+			return nil, fmt.Errorf("Lua 目录不是目录: %s", luaRoot)
+		}
+		entry := filepath.ToSlash(strings.TrimSpace(opts.LuaEntry))
+		entry = strings.TrimPrefix(strings.TrimPrefix(entry, "./"), "/")
+		if entry == "" {
+			entry = "main.lua"
+		}
+		if strings.Contains(entry, "..") {
+			return nil, fmt.Errorf("Lua 入口路径越界: %q", opts.LuaEntry)
+		}
+		s.luaRoot = luaRoot
+		s.luaEntry = path.Clean(entry)
+		s.luaOn = true
 	}
 	s.handler = s.routes()
 	return s, nil
@@ -115,13 +167,26 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/__berba.js", s.serveShim)
+	if s.luaOn {
+		mux.HandleFunc("/__berba/lua.json", s.serveLuaManifest)
+		mux.HandleFunc("/__berba/fengari.js", s.serveLuaAsset(luaruntime.Fengari))
+		mux.HandleFunc("/__berba/lua-runtime.js", s.serveLuaAsset(luaruntime.Runtime))
+		mux.HandleFunc("/__berba/fengari-license.txt", s.serveLuaAsset(luaruntime.License))
+	}
 	mux.HandleFunc("/", s.serveStatic)
 	return mux
 }
 
-func (s *Server) serveShim(w http.ResponseWriter, r *http.Request) {
+func methodAllowed(w http.ResponseWriter, r *http.Request) bool {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return false
+	}
+	return true
+}
+
+func (s *Server) serveShim(w http.ResponseWriter, r *http.Request) {
+	if !methodAllowed(w, r) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
@@ -132,9 +197,104 @@ func (s *Server) serveShim(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.mock != "" {
 		fmt.Fprintf(w, "%s\n/* --- dev/mock.js --- */\n%s\n", shimScript, s.mock)
+	} else {
+		fmt.Fprint(w, shimScript)
+	}
+	if s.luaOn {
+		fmt.Fprintf(w, "\n/* --- berba lua --- */\n%s\n", luaBootstrap)
+	}
+}
+
+func (s *Server) serveLuaAsset(data []byte) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !methodAllowed(w, r) {
+			return
+		}
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+		if r.Method == http.MethodHead {
+			return
+		}
+		w.Write(data)
+	}
+}
+
+type luaManifest struct {
+	Entry string            `json:"entry"`
+	Files map[string]string `json:"files"`
+	App   luaManifestApp    `json:"app"`
+}
+
+type luaManifestApp struct {
+	Name        string `json:"name"`
+	Package     string `json:"package"`
+	VersionName string `json:"versionName"`
+	VersionCode int    `json:"versionCode"`
+}
+
+func (s *Server) serveLuaManifest(w http.ResponseWriter, r *http.Request) {
+	if !methodAllowed(w, r) {
 		return
 	}
-	fmt.Fprint(w, shimScript)
+
+	files := make(map[string]string)
+	var total int64
+	err := fswalk.Files(s.luaRoot, func(rel, abs string) error {
+		if !strings.HasSuffix(strings.ToLower(rel), ".lua") {
+			return nil
+		}
+		info, err := os.Stat(abs)
+		if err != nil {
+			return err
+		}
+		if info.Size() > luaFileLimit {
+			return fmt.Errorf("Lua 文件超过 1MB 上限: %s", rel)
+		}
+		total += info.Size()
+		if total > luaTotalLimit {
+			return fmt.Errorf("Lua 源码总量超过 8MB 上限")
+		}
+		data, err := os.ReadFile(abs)
+		if err != nil {
+			return err
+		}
+		files[rel] = string(data)
+		return nil
+	})
+	if err != nil {
+		http.Error(w, "读取 Lua 源码失败: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if _, ok := files[s.luaEntry]; !ok {
+		http.Error(w, "未找到 Lua 入口: "+s.luaEntry, http.StatusInternalServerError)
+		return
+	}
+
+	payload := luaManifest{
+		Entry: s.luaEntry,
+		Files: files,
+		App: luaManifestApp{
+			Name:        s.app.Name,
+			Package:     s.app.Package,
+			VersionName: s.app.VersionName,
+			VersionCode: s.app.VersionCode,
+		},
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		http.Error(w, "序列化 Lua 清单失败", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+	if r.Method == http.MethodHead {
+		return
+	}
+	w.Write(data)
 }
 
 func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request) {
@@ -251,7 +411,8 @@ func contentTypeFor(name string) string {
 	return "application/octet-stream"
 }
 
-// shimScript 只依赖标准浏览器 API；桥调用由 mock 处理，未 mock 时明确 reject。
+// shimScript 只依赖标准浏览器 API；桥调用优先使用 mock，其次浏览器内 Lua，
+// 都没有时明确 reject。
 const shimScript = `(function () {
   var listeners = {};
   function resolveMock(name) {
@@ -260,16 +421,24 @@ const shimScript = `(function () {
   }
   var api = {
     call: function (name, args) {
-      try {
-        var entry = resolveMock(name);
-        if (entry === undefined) {
-          console.warn('[berba dev] 未 mock 的桥调用: ' + name, args);
-          return Promise.reject(new Error('berba dev: 未 mock 的桥调用 ' + name));
+      var entry = resolveMock(name);
+      if (entry !== undefined) {
+        try {
+          return Promise.resolve(typeof entry === 'function' ? entry(args) : entry);
+        } catch (e) {
+          return Promise.reject(e);
         }
-        return Promise.resolve(typeof entry === 'function' ? entry(args) : entry);
-      } catch (e) {
-        return Promise.reject(e);
       }
+      if (window.__berbaLuaReady) {
+        return window.__berbaLuaReady.then(function (rt) {
+          return rt.call(name, args);
+        }).catch(function (e) {
+          console.error('[berba dev] 桥调用失败: ' + name, e);
+          throw e;
+        });
+      }
+      console.warn('[berba dev] 桥调用未实现: ' + name);
+      return Promise.reject(new Error('berba dev: 桥调用 ' + name + ' 未实现（未启用 Lua，可在 dev/mock.js 中 mock）'));
     },
     on: function (name, fn) {
       (listeners[name] || (listeners[name] = [])).push(fn);
@@ -290,5 +459,35 @@ const shimScript = `(function () {
       try { fn(data); } catch (e) { console.error(e); }
     });
   };
+})();
+`
+
+// luaBootstrap 在启用 Lua 时追加到 shim 之后：按需加载 fengari 与运行时，
+// 再把 /__berba/lua.json 交给 __berbaLua.init。
+const luaBootstrap = `(function () {
+  function load(src) {
+    return new Promise(function (resolve, reject) {
+      var script = document.createElement('script');
+      script.src = src;
+      script.async = false;
+      script.onload = function () { resolve(); };
+      script.onerror = function () { reject(new Error('无法加载 ' + src)); };
+      (document.head || document.documentElement).appendChild(script);
+    });
+  }
+  window.__berbaLuaReady = load('/__berba/fengari.js')
+    .then(function () { return load('/__berba/lua-runtime.js'); })
+    .then(function () {
+      return fetch('/__berba/lua.json').then(function (res) {
+        if (!res.ok) throw new Error('读取 Lua 清单失败: HTTP ' + res.status);
+        return res.json();
+      });
+    })
+    .then(function (cfg) { return window.__berbaLua.init(cfg); })
+    .catch(function (e) {
+      console.error('[berba dev] Lua 运行时初始化失败', e);
+      throw e;
+    });
+  window.__berbaLuaReady.catch(function () { /* 由具体调用方处理 */ });
 })();
 `

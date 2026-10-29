@@ -281,4 +281,4 @@ shim 的注入方式：本地 HTML 响应会在 `<head>` 前插入脚本标签�
 - `alert` / `confirm` / `prompt` 使用原生对话框；`console.*` 写入 Logcat（tag `berba`，前缀 `[js]`）。
 - 多窗口禁用：`window.open` 与 `target="_blank"` 不会打开新页面；跳转请用 `web.load`（Lua 侧）或同页导航。
 - `getUserMedia` 与 `navigator.geolocation` 不可依赖；需要相机/定位请走 Lua `permission` + 自有实现。
-- 浏览器调试：`berba dev` 提供本地静态服务器并用 `dev/mock.js` 模拟桥，见 [build.md](build.md)。
+- 浏览器调试：`berba dev` 会在浏览器里用 fengari（Lua 5.3）真实执行 `lua/main.lua`，`bridge.register` 的方法可直接被页面调用，`dev/mock.js` 仍可覆盖单个方法。与设备（LuaJ，Lua 5.2）的差异：`bit32` 已补齐；`permission` 一律视为已授权；`store`/`file` 落在 `localStorage`；`http` 受浏览器 CORS 限制；`app.on("back")` 需手动调用 `window.__berbaDev.back()`。完整列表见 [build.md](build.md)。

@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"berba/internal/clierr"
 	"berba/internal/config"
@@ -51,13 +52,31 @@ func runDev(args []string) error {
 		return fmt.Errorf("读取 mock 脚本失败: %w", readErr)
 	}
 
+	luaRoot := ""
+	luaEntry := ""
+	if proj.HasLua {
+		luaRoot = proj.LuaDir
+		luaEntry = strings.TrimSpace(proj.Config.Lua.Entry)
+		if luaEntry == "" {
+			luaEntry = "main.lua"
+		}
+	}
+
 	srv, err := devserver.New(devserver.Options{
-		Root:   proj.WebDir,
-		Entry:  entry,
-		SPA:    proj.Config.Web.SPA,
-		MockJS: mock,
-		Host:   *host,
-		Port:   *port,
+		Root:     proj.WebDir,
+		Entry:    entry,
+		SPA:      proj.Config.Web.SPA,
+		MockJS:   mock,
+		Host:     *host,
+		Port:     *port,
+		LuaRoot:  luaRoot,
+		LuaEntry: luaEntry,
+		App: devserver.AppMeta{
+			Name:        proj.Config.Name,
+			Package:     proj.Config.Package,
+			VersionName: proj.Config.VersionName,
+			VersionCode: proj.Config.VersionCode,
+		},
 	})
 	if err != nil {
 		return err
@@ -71,9 +90,17 @@ func runDev(args []string) error {
 	defer stop()
 
 	fmt.Fprintf(out, "开发服务器: %s\n", url)
-	if mock != "" {
+	if luaRoot != "" {
+		fmt.Fprintf(out, "Lua 运行时: 浏览器内执行 %s（fengari）\n", luaEntry)
+	}
+	switch {
+	case mock != "" && luaRoot != "":
+		fmt.Fprintf(out, "桥 mock:    %s（优先于 Lua）\n", mockFile)
+	case mock != "":
 		fmt.Fprintf(out, "桥 mock:    %s\n", mockFile)
-	} else {
+	case luaRoot != "":
+		fmt.Fprintln(out, "桥 mock:    未找到 dev/mock.js，桥调用交给 Lua 运行时")
+	default:
 		fmt.Fprintln(out, "桥 mock:    未找到 dev/mock.js，调用 window.berba.call 将 reject")
 	}
 	fmt.Fprintln(out, "按 Ctrl+C 退出")
