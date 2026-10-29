@@ -101,10 +101,10 @@ func New(opts Options) (*Server, error) {
 		}
 		info, err := os.Stat(luaRoot)
 		if err != nil {
-			return nil, fmt.Errorf("Lua 目录不可用: %w", err)
+			return nil, fmt.Errorf("lua 目录不可用: %w", err)
 		}
 		if !info.IsDir() {
-			return nil, fmt.Errorf("Lua 目录不是目录: %s", luaRoot)
+			return nil, fmt.Errorf("lua 目录不是目录: %s", luaRoot)
 		}
 		entry := filepath.ToSlash(strings.TrimSpace(opts.LuaEntry))
 		entry = strings.TrimPrefix(strings.TrimPrefix(entry, "./"), "/")
@@ -112,7 +112,7 @@ func New(opts Options) (*Server, error) {
 			entry = "main.lua"
 		}
 		if strings.Contains(entry, "..") {
-			return nil, fmt.Errorf("Lua 入口路径越界: %q", opts.LuaEntry)
+			return nil, fmt.Errorf("lua 入口路径越界: %q", opts.LuaEntry)
 		}
 		s.luaRoot = luaRoot
 		s.luaEntry = path.Clean(entry)
@@ -250,11 +250,11 @@ func (s *Server) serveLuaManifest(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		if info.Size() > luaFileLimit {
-			return fmt.Errorf("Lua 文件超过 1MB 上限: %s", rel)
+			return fmt.Errorf("lua 文件超过 1MB 上限: %s", rel)
 		}
 		total += info.Size()
 		if total > luaTotalLimit {
-			return fmt.Errorf("Lua 源码总量超过 8MB 上限")
+			return fmt.Errorf("lua 源码总量超过 8MB 上限")
 		}
 		data, err := os.ReadFile(abs)
 		if err != nil {
