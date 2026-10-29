@@ -9,6 +9,8 @@
 | 项 | 值 |
 | --- | --- |
 | 构建 | `berba build` → `dist/<package>-<versionName>.apk` + `.sha256` |
+| 开发 | `berba dev --open`：浏览器内执行页面与 Lua，桥调用优先 `dev/mock.js`，其次 Lua |
+| 监听 | `berba watch [--install]`：文件变更自动重建，可选安装到设备 |
 | 自检 | `berba doctor`（工具链与 payload 完整性，含 aapt2/android.jar/dex 哈希） |
 | 安装 | `berba install`（需要 adb，失败不影响构建） |
 | 入口页面 | `app.json` 的 `web.startUrl`，默认 `https://appassets.androidhost/index.html` |
@@ -25,12 +27,14 @@ app.json          应用配置（唯一配置入口）
 icon.png          可选图标，PNG/JPG，建议 512x512
 www/              前端静态资源，整体打包进 assets/www
 lua/              Lua 逻辑，整体打包进 assets/lua
+dev/mock.js       可选，berba dev 的桥 mock（不会进入 APK）
 .berba/           构建缓存与签名密钥（不要读取、修改或提交）
 dist/             构建产物（不要手改）
 AGENTS.md         本文件
 ```
 
 - 只通过 `app.json`、`www/`、`lua/`、图标文件表达应用行为。
+- `dev/` 只用于本地调试，可自由创建 `dev/mock.js`；该目录不会打包进 APK。
 - 不存在可编辑的 Android 工程、Manifest、Gradle 或原生代码；不要尝试生成这些文件。
 - 不要提交 `.berba/` 与 `dist/`（脚手架已自带 `.gitignore`）。
 
@@ -42,6 +46,7 @@ AGENTS.md         本文件
 - 本地页面（`https://appassets.androidhost/*` → `assets/www/*`）或远程页面（需 `allowedOrigins`）。
 - Lua 5.2（LuaJ 3.0.1）胶水逻辑：事件、定时/异步回调（无 sleep）、JSON、HTTP(S)、本地键值存储与私有文件。
 - JS ↔ Lua 双向调用：`window.berba.call` / `bridge.register`，`bridge.emit` / `window.berba.on`。
+- `berba dev` 浏览器内调试：同一套页面与 Lua（含 `require`）直接运行，桥与事件可用；设备专属能力可在 `dev/mock.js` 伪造。
 - 运行时权限申请；Toast/对话框；沉浸式全屏；屏幕常亮；运行时切换屏幕方向；状态栏颜色；读写剪贴板；震动；系统分享；外部浏览器打开 http(s) 链接。
 - 私有文件读写/追加/重命名/删除/stat，键值存储（含 `store.keys`）；读取设备信息。
 - 配置应用名、包名、版本、图标、主题（light/dark/device）、屏幕方向、cleartext、meta-data。
@@ -49,7 +54,7 @@ AGENTS.md         本文件
 ### 3.2 不能做（不要尝试，也不要向用户承诺）
 
 - **没有任意 Java/Android API**：Lua 无 `luajava`，不能反射、不能调用未封装的系统能力；不支持原生插件、`.so`、JNI。
-- **Lua 库受限**：只有 `base`、`table`、`string`、`math`、`coroutine`、`bit32`；没有 `io`、`os`、`package`、`debug`、`utf8`、`load`、`dofile`、`loadfile`。Lua 是 5.2 语义：没有 `//`、位运算运算符、`utf8` 库。
+- **Lua 库受限**：只有 `base`、`table`、`string`、`math`、`coroutine`、`bit32`；没有 `io`、`os`、`package`、`debug`、`utf8`、`load`、`dofile`、`loadfile`。设备是 Lua 5.2 语义：没有 `//`、位运算运算符、`utf8` 库。**dev 的 fengari 是 Lua 5.3，会接受这些写法；请始终以设备 5.2 为准。**
 - **无后台能力**：没有 Service、推送、定时唤醒、开机自启、通知发送。
 - **系统集成有限**：`<input type="file">` 走系统文件选择器（SAF），下载/`device.share`/`device.openUrl` 交由系统处理；无自定义 Provider、无通知、无后台服务。新窗口/`target="_blank"`、`window.open` 仍被禁用（多窗口已关闭）。
 - **网页媒体/定位不可用**：壳未实现 `getUserMedia`（相机/麦克风）与 `navigator.geolocation` 授权，二者不可依赖。`permission.request` 只授予 Manifest 权限，不等于网页 API 可用。剪贴板读写使用 `device.clipboard()` / `device.clipboard(text)`。
@@ -59,6 +64,7 @@ AGENTS.md         本文件
 - **明文网络默认禁止**：只有 `"cleartext": true` 才允许 `http://`；混合内容永远禁止。
 - **远程页面受限**：启动页自身的 origin 会自动加入白名单；页面访问其他远程 origin 时必须写入 `web.allowedOrigins`，否则导航与 JS 桥都会被拒绝。只有白名单页面能使用桥。
 - **不要硬编码密钥/令牌**：`www/` 与 `lua/` 会原样进入 APK，可被解包读取。
+- **dev 不等于设备**：浏览器运行时是 Lua 5.3、权限一律视为已授予、`store`/`file` 落在 `localStorage`、`http` 受 CORS 限制。不要在 dev 通过后跳过 `berba build` 上机验证（差异见 6.12）。
 
 ## 4. app.json
 
@@ -113,6 +119,8 @@ AGENTS.md         本文件
 
 shim 由壳自动注入（本地 HTML 自动插入 `<script src="https://appassets.androidhost/__berba.js">`，远程白名单页在 `onPageStarted` 再注入一次）。**不要在页面里手动引入 shim，也不要重定义 `window.berba`。**
 
+`berba dev` 由开发服务器注入 `/__berba.js`，页面代码无需改动；调试用的 mock 写在 `dev/mock.js`（`window.__berbaMock`），同名方法优先于 Lua，且不会进入 APK。不要把调试 mock 写进 `www/`。
+
 ```js
 // 调用 Lua 注册的方法，返回 Promise
 const res = await window.berba.call('hello', { user: 'a' });
@@ -132,7 +140,7 @@ window.berba.off('tick', onTick);
 
 ## 6. Lua API
 
-全局白名单：`app`、`web`、`bridge`、`http`、`file`、`store`、`permission`、`ui`、`device`、`json`、`log`、`require`。所有回调在单一 Lua 工作线程执行；`ui`/`web`/`app.exit`/`device.orientation` 内部自动切主线程。
+全局白名单：`app`、`web`、`bridge`、`http`、`file`、`store`、`permission`、`ui`、`device`、`json`、`log`、`require`。设备上所有回调在单一 Lua 工作线程执行（dev 浏览器为事件循环）；`ui`/`web`/`app.exit`/`device.orientation` 内部自动切主线程。
 
 ### 6.1 入口与 require
 
@@ -275,6 +283,28 @@ log("tag", 123)                            -- Logcat，tag = berba
 
 JSON 转换：键为 `1..n` 连续整数的表编码为数组，否则为对象（空表为 `{}`）；`nil` → `null`；函数/userdata 编码为 `null`；存在循环引用或嵌套超过 64 层时整个结果为 `"null"`。
 
+### 6.12 dev 浏览器运行时
+
+`berba dev` 在项目启用 Lua 时用 fengari 执行 `lua.entry`（Lua 5.3），设备壳是 LuaJ（Lua 5.2）。`require`、`bridge.register`、`bridge.emit`、`app.on("create")`、`web.on("pageFinished")` 行为一致；入口抛错时 pending 的 `berba.call` 会 reject。
+
+| 能力 | 浏览器行为 |
+| --- | --- |
+| `app.info()` | `platform = "browser"`、`sdk = 0`，其余来自 `app.json` |
+| `app.on("back")` | 浏览器拦不到返回键，用 `window.__berbaDev.back()` 手动触发 |
+| `app.on("newIntent")` | 不触发 |
+| `pause` / `resume` | 绑定页面 `visibilitychange` |
+| `permission.*` | 一律视为已授权，不能验证真实授权流程 |
+| `store` / `file` | 落在 `localStorage`，清站点数据即丢失；单文件仍限 8MB |
+| `http.*` | 受 CORS 限制；明文 `http://` 不拦截；`onProgress` 的总长可能为 `-1` |
+| `ui.statusBar` | no-op |
+| `ui.fullscreen` / `ui.keepScreenOn` | 需要用户手势 / Wake Lock（https 或 localhost） |
+| `device.clipboard()` | 读取返回空串；写入正常 |
+| `device.share` / `device.orientation` | 仅部分浏览器可用，失败时打印警告 |
+| Lua 版本 | 5.3、32 位整数、已补 `bit32`；`math.type` 等 5.3 专有特性在设备上不可用 |
+
+- `--host 0.0.0.0` 会把项目源码与 Lua 执行能力暴露到局域网，仅真机联调时临时使用，用完改回 `127.0.0.1`。
+- 浏览器通过不代表设备通过：提交前仍需 `berba build` 并上机验证权限、文件、方向与全屏。
+
 ## 7. 关键约定与陷阱
 
 1. **数组判定**：Lua 表只有键恰好为 `1..n` 连续整数时才编码为 JSON 数组；空表编码为 `{}`。需要空数组时用 `json.encode` 前自行构造或返回对象。
@@ -284,18 +314,20 @@ JSON 转换：键为 `1..n` 连续整数的表编码为数组，否则为对象�
 5. **页面路径大小写敏感**，全部使用相对路径；`spa: true` 只对无扩展名路径回退 `index.html`。
 6. **白名单外的导航被拦截**：外部 `http(s)` 链接若 origin 未列入 `allowedOrigins` 会静默失败；`target="_blank"`/`window.open` 不可用。
 7. **安全区域**：targetSdk 35 为 edge-to-edge，页面请使用 `viewport-fit=cover` 与 `env(safe-area-inset-*)` 避免被状态栏/导航栏遮挡。
-8. **调试**：`berba build --debug` 后可用 `chrome://inspect` 连接 WebView；Lua `log` 输出在 Logcat（tag `berba`）。release 构建无法远程调试，页面 `console` 也不会出现在 Logcat。
+8. **调试**：先用 `berba dev --open` 在浏览器验证页面与 Lua（占位能力用 `dev/mock.js`）；`berba build --debug` 后可用 `chrome://inspect` 连接 WebView；Lua `log` 输出在 Logcat（tag `berba`）。release 构建无法远程调试，页面 `console` 也不会出现在 Logcat。
 9. **升级与身份**：`package` 不可修改；覆盖升级必须提高 `versionCode`；签名密钥丢失则无法升级，只能卸载重装。
 10. **构建即校验**：修改 `app.json`、`www/`、`lua/` 后必须运行 `berba build`；构建会自检签名、包名与 versionCode，并输出 SHA256。
+11. **Lua 版本以设备为准**：dev 浏览器是 5.3，可能放过设备 5.2 不支持的写法（`//`、位运算符、`math.type` 等）；`bit32` 两端都有，但不要依赖 5.3 语法。开发阶段请同时跑 `berba build` 验证。
 
 ## 8. 修改后的验证清单
 
-1. `berba build` 成功，输出 APK 与 SHA256。
-2. 可选 `berba doctor` 确认工具链完整。
-3. 安装后检查：启动页加载、`berba.call` 往返、`bridge.emit` 推送、`pageFinished` 事件、返回键行为。
-4. 涉及权限时：首次申请、拒绝后再次申请、未声明权限的负例。
-5. 涉及存储/文件时：重启应用后数据仍在；路径越界被拒。
-6. 涉及全屏/常亮/方向时：切换应用再回来状态正确。
+1. `berba dev --open` 打开页面：`berba.call` 往返、`bridge.emit` 推送、`pageFinished` 事件正常，控制台没有「未实现/未注册」的桥调用。
+2. `berba build` 成功，输出 APK 与 SHA256。
+3. 可选 `berba doctor` 确认工具链完整。
+4. 安装后检查：启动页加载、`berba.call` 往返、`bridge.emit` 推送、`pageFinished` 事件、返回键行为。
+5. 涉及权限时：首次申请、拒绝后再次申请、未声明权限的负例。
+6. 涉及存储/文件时：重启应用后数据仍在；路径越界被拒。
+7. 涉及全屏/常亮/方向时：切换应用再回来状态正确。
 
 ## 9. 安全要求
 
