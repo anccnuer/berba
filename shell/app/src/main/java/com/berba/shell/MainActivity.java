@@ -204,6 +204,13 @@ public class MainActivity extends Activity {
             window.setStatusBarColor(Color.TRANSPARENT);
             window.setNavigationBarColor(Color.TRANSPARENT);
         }
+        if (Build.VERSION.SDK_INT >= 28) {
+            // 允许内容在沉浸式全屏时延伸至刘海/挖孔，否则全屏后该区域会留白。
+            WindowManager.LayoutParams attrs = window.getAttributes();
+            attrs.layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+            window.setAttributes(attrs);
+        }
         applySystemBarAppearance(window);
     }
 
@@ -270,9 +277,15 @@ public class MainActivity extends Activity {
             return;
         }
         view.setOnApplyWindowInsetsListener((v, insets) -> {
+            android.graphics.Insets ime = insets.getInsets(WindowInsets.Type.ime());
+            // 全屏时系统栏已隐藏，但仍会残留刘海/挖孔 inset；
+            // 此时只保留输入法留白，其余方向铺满整个屏幕。
+            if (fullscreen) {
+                v.setPadding(0, 0, 0, ime.bottom);
+                return insets;
+            }
             android.graphics.Insets bars = insets.getInsets(
                     WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
-            android.graphics.Insets ime = insets.getInsets(WindowInsets.Type.ime());
             v.setPadding(bars.left, bars.top, bars.right, Math.max(bars.bottom, ime.bottom));
             return insets;
         });
@@ -681,6 +694,8 @@ public class MainActivity extends Activity {
             } else {
                 controller.show(WindowInsets.Type.systemBars());
             }
+            // 立即让 insets 监听器按新的全屏状态刷新留白。
+            window.getDecorView().requestApplyInsets();
             return;
         }
         View decor = window.getDecorView();
