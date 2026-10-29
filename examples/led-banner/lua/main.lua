@@ -1,19 +1,10 @@
 local DEFAULT = {
-  text = "演唱会加油！",
-  font = "black",
+  text = "哥哥好厉害！",
   size = 60,
   speed = 320,
   color = "#ffef5c",
-  background = "#08080c"
-}
-
-local FONTS = {
-  black = true,
-  sans = true,
-  serif = true,
-  condensed = true,
-  mono = true,
-  casual = true
+  background = "#08080c",
+  glow = true
 }
 
 local active = false
@@ -45,11 +36,11 @@ local function sanitize(input)
   end
   return {
     text = text,
-    font = FONTS[input.font] and input.font or DEFAULT.font,
     size = clamp(input.size, 20, 90, DEFAULT.size),
     speed = clamp(input.speed, 80, 900, DEFAULT.speed),
     color = color(input.color, DEFAULT.color),
-    background = color(input.background, DEFAULT.background)
+    background = color(input.background, DEFAULT.background),
+    glow = input.glow ~= false
   }
 end
 

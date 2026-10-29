@@ -2,21 +2,12 @@
   'use strict';
 
   var DEFAULTS = {
-    text: '演唱会加油！',
-    font: 'black',
+    text: '哥哥好厉害！',
     size: 60,
     speed: 320,
     color: '#ffef5c',
-    background: '#08080c'
-  };
-
-  var FONTS = {
-    black: { family: '"sans-serif-black", "Noto Sans SC", sans-serif', weight: 900 },
-    sans: { family: 'Roboto, "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif', weight: 700 },
-    serif: { family: '"Noto Serif SC", "Songti SC", SimSun, serif', weight: 700 },
-    condensed: { family: '"sans-serif-condensed", "Arial Narrow", sans-serif', weight: 700 },
-    mono: { family: '"Roboto Mono", "Noto Sans Mono", monospace', weight: 700 },
-    casual: { family: 'casual, cursive', weight: 700 }
+    background: '#08080c',
+    glow: true
   };
 
   var TEXT_COLORS = ['#ffef5c', '#ff4d6d', '#58e6ff', '#7dff6b', '#ffffff', '#ff9f1c'];
@@ -24,15 +15,13 @@
 
   var els = {
     text: document.getElementById('text'),
-    font: document.getElementById('font'),
     size: document.getElementById('size'),
     sizeVal: document.getElementById('sizeVal'),
     speed: document.getElementById('speed'),
     speedVal: document.getElementById('speedVal'),
-    color: document.getElementById('color'),
-    bgColor: document.getElementById('bgColor'),
     textColors: document.getElementById('textColors'),
     bgColors: document.getElementById('bgColors'),
+    glow: document.getElementById('glow'),
     preview: document.getElementById('preview'),
     previewTrack: document.getElementById('previewTrack'),
     previewA: document.getElementById('previewA'),
@@ -46,6 +35,7 @@
   };
 
   var settings = copy(DEFAULTS);
+  var swatchRows = [];
   var bannerOpen = false;
   var saveTimer = 0;
   var lastTap = 0;
@@ -80,25 +70,35 @@
     var text = typeof src.text === 'string' ? src.text.slice(0, 40) : DEFAULTS.text;
     return {
       text: text,
-      font: FONTS[src.font] ? src.font : DEFAULTS.font,
       size: clamp(src.size, 20, 90, DEFAULTS.size),
       speed: clamp(src.speed, 80, 900, DEFAULTS.speed),
       color: colorOr(src.color, DEFAULTS.color),
-      background: colorOr(src.background, DEFAULTS.background)
+      background: colorOr(src.background, DEFAULTS.background),
+      glow: src.glow !== false
     };
+  }
+
+  function inkFor(hex) {
+    var r = parseInt(hex.slice(1, 3), 16);
+    var g = parseInt(hex.slice(3, 5), 16);
+    var b = parseInt(hex.slice(5, 7), 16);
+    return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 > 0.55 ? '#16130a' : '#101014';
   }
 
   function displayText() {
     return settings.text.trim() || '应援文字';
   }
 
-  function fontOf(key) {
-    return FONTS[key] || FONTS.sans;
-  }
-
   function setHint(message, isError) {
     els.hint.textContent = message;
     els.hint.classList.toggle('error', !!isError);
+  }
+
+  function paintRange(input) {
+    var min = Number(input.min);
+    var max = Number(input.max);
+    var pct = ((Number(input.value) - min) / (max - min)) * 100;
+    input.style.setProperty('--fill', pct.toFixed(2) + '%');
   }
 
   function scheduleSave() {
@@ -108,7 +108,7 @@
     }, 300);
   }
 
-  function buildSwatches(container, colors, key, input) {
+  function buildSwatches(container, colors, key) {
     container.innerHTML = '';
     colors.forEach(function (color) {
       var button = document.createElement('button');
@@ -119,62 +119,89 @@
       button.setAttribute('aria-label', color);
       button.addEventListener('click', function () {
         settings[key] = color;
-        input.value = color;
         syncSwatches();
         update();
       });
       container.appendChild(button);
     });
+
+    var custom = document.createElement('input');
+    custom.type = 'color';
+    custom.className = 'swatch-custom';
+    custom.value = settings[key];
+    custom.setAttribute('aria-label', '自定义颜色');
+    custom.addEventListener('input', function () {
+      settings[key] = colorOr(custom.value, settings[key]);
+      syncSwatches();
+      update();
+    });
+    container.appendChild(custom);
+
+    swatchRows.push({ key: key, container: container, custom: custom });
   }
 
   function syncSwatches() {
-    [els.textColors, els.bgColors].forEach(function (container) {
-      Array.prototype.forEach.call(container.children, function (button) {
-        var key = container === els.textColors ? 'color' : 'background';
-        button.classList.toggle('active', button.dataset.color === settings[key]);
+    swatchRows.forEach(function (row) {
+      Array.prototype.forEach.call(row.container.children, function (node) {
+        if (node.dataset && node.dataset.color) {
+          node.classList.toggle('active', node.dataset.color === settings[row.key]);
+        }
       });
+      row.custom.value = settings[row.key];
     });
   }
 
   function syncForm() {
     els.text.value = settings.text;
-    els.font.value = settings.font;
     els.size.value = String(settings.size);
     els.speed.value = String(settings.speed);
-    els.color.value = settings.color;
-    els.bgColor.value = settings.background;
     els.sizeVal.textContent = String(settings.size);
     els.speedVal.textContent = String(settings.speed);
+    els.glow.checked = settings.glow;
+    paintRange(els.size);
+    paintRange(els.speed);
     syncSwatches();
   }
 
+  function applyAccent() {
+    var root = document.documentElement.style;
+    root.setProperty('--accent', settings.color);
+    root.setProperty('--on-accent', inkFor(settings.color));
+  }
+
+  function setGlow(on) {
+    els.preview.classList.toggle('glow', on);
+    els.banner.classList.toggle('glow', on);
+  }
+
   function renderPreview() {
-    var font = fontOf(settings.font);
     var text = displayText();
-    var sizePx = Math.round(10 + settings.size * 0.5);
     [els.previewA, els.previewB].forEach(function (chunk) {
       chunk.textContent = text;
-      chunk.style.fontFamily = font.family;
-      chunk.style.fontWeight = String(font.weight);
-      chunk.style.fontSize = sizePx + 'px';
       chunk.style.color = settings.color;
     });
     els.preview.style.background = settings.background;
+
+    var ph = els.preview.clientHeight || 132;
+    var fontSize = Math.max(22, Math.min(ph * 0.75, ph * settings.size / 100));
+    els.preview.style.setProperty('--preview-size', fontSize.toFixed(1) + 'px');
+
     var width = els.previewA.getBoundingClientRect().width || 120;
     var duration = Math.max(3, width / Math.max(40, settings.speed * 0.2));
     els.previewTrack.style.animationDuration = duration.toFixed(2) + 's';
+
+    applyAccent();
+    setGlow(settings.glow);
   }
 
   function applyBannerStyle() {
-    var font = fontOf(settings.font);
     var text = displayText();
     els.chunkA.textContent = text;
     els.chunkB.textContent = text;
     els.banner.style.setProperty('--banner-bg', settings.background);
     els.track.style.setProperty('--banner-color', settings.color);
     els.track.style.setProperty('--banner-size', Math.round(window.innerHeight * settings.size / 100) + 'px');
-    els.track.style.fontFamily = font.family;
-    els.track.style.fontWeight = String(font.weight);
+    setGlow(settings.glow);
   }
 
   function layoutBanner() {
@@ -240,33 +267,24 @@
       update();
     });
 
-    els.font.addEventListener('change', function () {
-      settings.font = FONTS[els.font.value] ? els.font.value : DEFAULTS.font;
-      update();
-    });
-
     els.size.addEventListener('input', function () {
       settings.size = clamp(els.size.value, 20, 90, DEFAULTS.size);
       els.sizeVal.textContent = String(settings.size);
+      paintRange(els.size);
       update();
     });
 
     els.speed.addEventListener('input', function () {
       settings.speed = clamp(els.speed.value, 80, 900, DEFAULTS.speed);
       els.speedVal.textContent = String(settings.speed);
+      paintRange(els.speed);
       update();
     });
 
-    els.color.addEventListener('input', function () {
-      settings.color = colorOr(els.color.value, DEFAULTS.color);
-      syncSwatches();
-      update();
-    });
-
-    els.bgColor.addEventListener('input', function () {
-      settings.background = colorOr(els.bgColor.value, DEFAULTS.background);
-      syncSwatches();
-      update();
+    els.glow.addEventListener('change', function () {
+      settings.glow = els.glow.checked;
+      setGlow(settings.glow);
+      scheduleSave();
     });
 
     els.start.addEventListener('click', openBanner);
@@ -310,8 +328,8 @@
   }
 
   function init() {
-    buildSwatches(els.textColors, TEXT_COLORS, 'color', els.color);
-    buildSwatches(els.bgColors, BG_COLORS, 'background', els.bgColor);
+    buildSwatches(els.textColors, TEXT_COLORS, 'color');
+    buildSwatches(els.bgColors, BG_COLORS, 'background');
     bind();
     syncForm();
     renderPreview();

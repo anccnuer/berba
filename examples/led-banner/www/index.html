@@ -3,69 +3,68 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
-  <meta name="theme-color" content="#08080c">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#101014">
   <title>应援横幅</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <div class="app">
     <header class="hero">
-      <p class="kicker">CONCERT BANNER</p>
       <h1>应援横幅</h1>
-      <p class="sub">设置文字与样式，点开始后横屏全屏滚动。</p>
     </header>
 
-    <div class="preview" id="preview" aria-hidden="true">
-      <div class="preview-track" id="previewTrack">
-        <span class="preview-chunk" id="previewA"></span>
-        <span class="preview-chunk" id="previewB"></span>
+    <section class="preview-card" aria-hidden="true">
+      <div class="preview" id="preview">
+        <div class="preview-track" id="previewTrack">
+          <span class="preview-chunk" id="previewA"></span>
+          <span class="preview-chunk" id="previewB"></span>
+        </div>
       </div>
-    </div>
+    </section>
 
-    <main class="panel">
+    <main class="card">
       <label class="field" for="text">
-        <span>文字</span>
+        <span class="field-label">应援文字</span>
         <input id="text" type="text" maxlength="40" autocomplete="off"
                autocapitalize="off" spellcheck="false" placeholder="输入应援文字">
       </label>
 
-      <div class="row">
-        <label class="field" for="font">
-          <span>字体</span>
-          <select id="font">
-            <option value="black">超粗黑</option>
-            <option value="sans">黑体</option>
-            <option value="serif">宋体衬线</option>
-            <option value="condensed">窄体</option>
-            <option value="mono">等宽</option>
-            <option value="casual">手写圆体</option>
-          </select>
-        </label>
-        <label class="field" for="size">
-          <span><span>大小</span><b id="sizeVal">60</b></span>
-          <input id="size" type="range" min="20" max="90" step="1" value="60">
-        </label>
+      <div class="field">
+        <span class="field-label"><span>字号</span><b class="value" id="sizeVal">60</b></span>
+        <input id="size" type="range" min="20" max="90" step="1" value="60">
       </div>
 
-      <label class="field" for="speed">
-        <span><span>滚动速度</span><span class="unit"><b id="speedVal">320</b> px/s</span></span>
+      <div class="field">
+        <span class="field-label"><span>滚动速度</span><span class="value-line"><b class="value" id="speedVal">320</b><em>px/s</em></span></span>
         <input id="speed" type="range" min="80" max="900" step="20" value="320">
+      </div>
+
+      <div class="field">
+        <span class="field-label">文字颜色</span>
+        <div class="swatches" id="textColors"></div>
+      </div>
+
+      <div class="field">
+        <span class="field-label">背景颜色</span>
+        <div class="swatches" id="bgColors"></div>
+      </div>
+
+      <label class="toggle-row" for="glow">
+        <span class="toggle-text">
+          <b>荧光光晕</b>
+          <small>给文字加一层霓虹辉光</small>
+        </span>
+        <span class="switch">
+          <input id="glow" type="checkbox" checked>
+          <span class="switch-track"><span class="switch-thumb"></span></span>
+        </span>
       </label>
 
-      <div class="row">
-        <div class="field">
-          <span>文字颜色</span>
-          <div class="colors" id="textColors"></div>
-          <input id="color" type="color" value="#ffef5c" aria-label="自定义文字颜色">
-        </div>
-        <div class="field">
-          <span>背景颜色</span>
-          <div class="colors" id="bgColors"></div>
-          <input id="bgColor" type="color" value="#08080c" aria-label="自定义背景颜色">
-        </div>
-      </div>
-
-      <button id="start" class="start" type="button">开始应援</button>
+      <button id="start" class="start" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.14v13.72c0 .8.87 1.3 1.56.9l10.5-6.86a1.06 1.06 0 0 0 0-1.8L9.56 4.24A1.06 1.06 0 0 0 8 5.14z"/></svg>
+        <span>进入全屏</span>
+      </button>
       <p class="hint" id="hint">进入后双击屏幕或按返回键退出</p>
     </main>
   </div>
