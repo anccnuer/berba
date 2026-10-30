@@ -85,20 +85,24 @@ $sources = Get-ChildItem -LiteralPath $Src -Recurse -Filter *.java | ForEach-Obj
 if ($LASTEXITCODE -ne 0) { Die "javac 失败 (exit $LASTEXITCODE)" }
 
 Write-Host "==> JVM 冒烟测试"
-$TestSrc = Join-Path $Root "shell\app\src\test\java\com\berba\shell"
+$TestSrc = Join-Path $Root "shell\app\src\test\java"
 if (Test-Path -LiteralPath $TestSrc) {
     $TestClasses = Join-Path $Work "test-classes"
     if (Test-Path -LiteralPath $TestClasses) { Remove-Item -LiteralPath $TestClasses -Recurse -Force }
     New-Item -ItemType Directory -Force -Path $TestClasses | Out-Null
-    $testSources = Get-ChildItem -LiteralPath $TestSrc -Filter *.java |
-        ForEach-Object { $_.FullName }
-    & $Javac --release 17 -encoding UTF-8 -cp "$Classes;$AndroidJar;$Luaj" `
-        -d $TestClasses @testSources
-    if ($LASTEXITCODE -ne 0) { Die "JVM 测试编译失败 (exit $LASTEXITCODE)" }
-    foreach ($test in $testSources) {
-        $testName = [System.IO.Path]::GetFileNameWithoutExtension($test)
-        & $Java -cp "$TestClasses;$Classes;$AndroidJar;$Luaj" "com.berba.shell.$testName"
-        if ($LASTEXITCODE -ne 0) { Die "测试失败: $testName (exit $LASTEXITCODE)" }
+    $testSources = @(Get-ChildItem -LiteralPath $TestSrc -Recurse -Filter *.java |
+        Sort-Object FullName | ForEach-Object { $_.FullName })
+    if ($testSources.Count -gt 0) {
+        & $Javac --release 17 -encoding UTF-8 -cp "$Classes;$AndroidJar;$Luaj" `
+            -d $TestClasses @testSources
+        if ($LASTEXITCODE -ne 0) { Die "JVM 测试编译失败 (exit $LASTEXITCODE)" }
+        foreach ($test in $testSources) {
+            if (-not $test.EndsWith("Test.java")) { continue }
+            $rel = $test.Substring($TestSrc.Length).TrimStart('\', '/')
+            $cls = $rel.Substring(0, $rel.Length - 5) -replace '[\\/]', '.'
+            & $Java -cp "$TestClasses;$Classes;$AndroidJar;$Luaj" $cls
+            if ($LASTEXITCODE -ne 0) { Die "测试失败: $cls (exit $LASTEXITCODE)" }
+        }
     }
 }
 

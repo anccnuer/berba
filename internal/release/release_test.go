@@ -15,6 +15,8 @@ import (
 	"testing"
 
 	"berba/internal/aapt2"
+	"berba/internal/nativeplugin"
+	"berba/internal/nativeplugin/nativeplugintest"
 	"berba/internal/payload"
 )
 
@@ -37,6 +39,7 @@ func stage(t *testing.T) (home, docs string) {
 			t.Fatal(err)
 		}
 	}
+	stageShell(t, home)
 	if err := os.WriteFile(filepath.Join(docs, "README.md"), []byte("# docs"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -53,6 +56,30 @@ func stage(t *testing.T) (home, docs string) {
 		t.Fatal(err)
 	}
 	return home, docs
+}
+
+// stageShell 写入 payload/shell.json 与三个 ABI 的合法 JNI shim。
+func stageShell(t *testing.T, home string) {
+	t.Helper()
+	body := fmt.Sprintf(`{"schema":1,"capabilities":["native"],"nativeAbiVersion":%d}`, nativeplugin.ABIVersion)
+	writeFile(t, filepath.Join(home, "payload", "shell.json"), []byte(body), 0o644)
+	for _, abi := range nativeplugin.SupportedABIs {
+		data, err := nativeplugintest.Shim(abi)
+		if err != nil {
+			t.Fatalf("%s: %v", abi, err)
+		}
+		writeFile(t, filepath.Join(home, "payload", "native", abi, payload.NativeShimName), data, 0o644)
+	}
+}
+
+func writeFile(t *testing.T, path string, content []byte, perm os.FileMode) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, content, perm); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func exeSuffix() string {
@@ -174,6 +201,7 @@ func stageCross(t *testing.T, targetOS string) string {
 			t.Fatal(err)
 		}
 	}
+	stageShell(t, home)
 	return home
 }
 
@@ -211,11 +239,26 @@ func TestPackageCrossTarget(t *testing.T) {
 	}
 }
 
+func TestPackageRequiresShellManifest(t *testing.T) {
+	home, docs := stage(t)
+	if err := os.Remove(filepath.Join(home, "payload", "shell.json")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Package(context.Background(), Options{
+		Home: home, OutDir: t.TempDir(), DocsDir: docs, Version: "0.13", Aapt2Version: "2.19",
+	}); err == nil || !strings.Contains(err.Error(), "payload/shell.json") {
+		t.Fatalf("missing shell.json accepted: %v", err)
+	}
+}
+
 func TestPackageRequiresNativeShims(t *testing.T) {
 	home, docs := stage(t)
 	writeShell := func(version int) {
 		body := fmt.Sprintf(`{"schema":1,"capabilities":["native"],"nativeAbiVersion":%d}`, version)
-		if err := os.WriteFile(filepath.Join(home, "payload", "shell.json"), []byte(body), 0o644); err != nil {
+		writeFile(t, filepath.Join(home, "payload", "shell.json"), []byte(body), 0o644)
+	}
+	removeShim := func(abi string) {
+		if err := os.Remove(filepath.Join(home, "payload", "native", abi, payload.NativeShimName)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -225,11 +268,21 @@ func TestPackageRequiresNativeShims(t *testing.T) {
 	}); err == nil || !strings.Contains(err.Error(), "nativeAbiVersion") {
 		t.Fatalf("old shell accepted: %v", err)
 	}
-	writeShell(1)
+	writeShell(nativeplugin.ABIVersion)
+	removeShim("x86_64")
 	if _, err := Package(context.Background(), Options{
 		Home: home, OutDir: t.TempDir(), DocsDir: docs, Version: "0.13", Aapt2Version: "2.19",
-	}); err == nil || !strings.Contains(err.Error(), "payload/native") {
+	}); err == nil || !strings.Contains(err.Error(), "payload/native/x86_64") {
 		t.Fatalf("missing shim accepted: %v", err)
+	}
+	stageShell(t, home)
+	// shim 存在但不是合法 ELF 时必须失败。
+	bad := filepath.Join(home, "payload", "native", "armeabi-v7a", payload.NativeShimName)
+	writeFile(t, bad, []byte("not elf"), 0o644)
+	if _, err := Package(context.Background(), Options{
+		Home: home, OutDir: t.TempDir(), DocsDir: docs, Version: "0.13", Aapt2Version: "2.19",
+	}); err == nil || !strings.Contains(err.Error(), "解析 ELF 失败") {
+		t.Fatalf("bad shim accepted: %v", err)
 	}
 }
 

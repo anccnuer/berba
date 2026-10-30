@@ -108,21 +108,24 @@ func Package(ctx context.Context, opts Options) (*Result, error) {
 	for _, dex := range layout.Dexes {
 		shell.DexSha256 = append(shell.DexSha256, mustHash(dex))
 	}
-	if layout.Shell != nil {
-		if layout.Shell.NativeABIVersion != nativeplugin.ABIVersion {
-			return nil, fmt.Errorf("shell 的 nativeAbiVersion=%d，期望 %d（请重新构建 shell）", layout.Shell.NativeABIVersion, nativeplugin.ABIVersion)
+	// 发行包必须携带 shell.json：它既是能力协商清单，也是原生 shim 的 ABI 版本来源。
+	// LocateOn 对缺失的 shell.json 是宽容的（便于旧 payload 继续工作），这里收紧为错误。
+	if layout.Shell == nil {
+		return nil, fmt.Errorf("发行包缺少 payload/shell.json（用 scripts/build-shell 重新生成）")
+	}
+	if layout.Shell.NativeABIVersion != nativeplugin.ABIVersion {
+		return nil, fmt.Errorf("shell 的 nativeAbiVersion=%d，期望 %d（请重新构建 shell）", layout.Shell.NativeABIVersion, nativeplugin.ABIVersion)
+	}
+	shell.NativeSha256 = make(map[string]string, len(nativeplugin.SupportedABIs))
+	for _, abi := range nativeplugin.SupportedABIs {
+		shim, ok := layout.Native[abi]
+		if !ok {
+			return nil, fmt.Errorf("发行包缺少 payload/native/%s/%s", abi, payload.NativeShimName)
 		}
-		shell.NativeSha256 = make(map[string]string, len(nativeplugin.SupportedABIs))
-		for _, abi := range nativeplugin.SupportedABIs {
-			shim, ok := layout.Native[abi]
-			if !ok {
-				return nil, fmt.Errorf("发行包缺少 payload/native/%s/%s", abi, payload.NativeShimName)
-			}
-			if err := nativeplugin.ValidateShimELF(shim, abi); err != nil {
-				return nil, err
-			}
-			shell.NativeSha256[abi] = mustHash(shim)
+		if err := nativeplugin.ValidateShimELF(shim, abi); err != nil {
+			return nil, err
 		}
+		shell.NativeSha256[abi] = mustHash(shim)
 	}
 
 	progress("写入 versions.json")

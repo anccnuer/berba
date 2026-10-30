@@ -101,21 +101,32 @@ done < <(find "$SRC" -name '*.java' -print0)
   -d "$WORK/classes" "${SOURCES[@]}"
 
 echo "==> JVM 冒烟测试"
-TEST_DIR="$ROOT/shell/app/src/test/java/com/berba/shell"
-if [ -d "$TEST_DIR" ]; then
+TEST_SRC="$ROOT/shell/app/src/test/java"
+if [ -d "$TEST_SRC" ]; then
   rm -rf "$WORK/test-classes"
   mkdir -p "$WORK/test-classes"
-  "$JAVAC" --release 17 -encoding UTF-8 \
-    -cp "$WORK_ARG/classes$CPSEP$ANDROID_JAR_ARG$CPSEP$LUAJ_ARG" \
-    -d "$WORK/test-classes" "$TEST_DIR"/*.java
-  JAVA_CMD="${JAVA_BIN}java"
-  command -v "$JAVA_CMD" >/dev/null 2>&1 || die "找不到 java（需要完整 JDK，可设置 JAVA_HOME）"
-  TEST_CP="$WORK_ARG/test-classes$CPSEP$WORK_ARG/classes$CPSEP$ANDROID_JAR_ARG$CPSEP$LUAJ_ARG"
-  for test in "$TEST_DIR"/*Test.java; do
-    [ -f "$test" ] || continue
-    cls="$(basename "$test" .java)"
-    "$JAVA_CMD" -cp "$TEST_CP" "com.berba.shell.$cls"
-  done
+  TESTS=()
+  while IFS= read -r -d '' f; do
+    TESTS+=("$f")
+  done < <(find "$TEST_SRC" -name '*.java' -print0 | sort -z)
+  if [ ${#TESTS[@]} -gt 0 ]; then
+    "$JAVAC" --release 17 -encoding UTF-8 \
+      -cp "$WORK_ARG/classes$CPSEP$ANDROID_JAR_ARG$CPSEP$LUAJ_ARG" \
+      -d "$WORK/test-classes" "${TESTS[@]}"
+    JAVA_CMD="${JAVA_BIN}java"
+    command -v "$JAVA_CMD" >/dev/null 2>&1 || die "找不到 java（需要完整 JDK，可设置 JAVA_HOME）"
+    TEST_CP="$WORK_ARG/test-classes$CPSEP$WORK_ARG/classes$CPSEP$ANDROID_JAR_ARG$CPSEP$LUAJ_ARG"
+    for test in "${TESTS[@]}"; do
+      rel="${test#"$TEST_SRC"/}"
+      case "$rel" in
+        *Test.java) ;;
+        *) continue ;;
+      esac
+      cls="${rel%.java}"
+      cls="${cls//\//.}"
+      "$JAVA_CMD" -cp "$TEST_CP" "$cls"
+    done
+  fi
 fi
 
 echo "==> 打包 shell.jar"
