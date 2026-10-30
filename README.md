@@ -68,6 +68,9 @@ cd myapp
 | --- | --- |
 | [`examples/hello`](examples/hello) | 最小可运行项目：页面调用 Lua、Lua 回调页面、设备信息、持久化计数 |
 | [`examples/led-banner`](examples/led-banner) | 演唱会应援横幅：竖屏调字号/颜色/荧光，横屏全屏滚动，设置自动保存 |
+| [`examples/notify`](examples/notify) | 本地通知：权限申请、通道、显示/取消、点击事件（冷/热启动） |
+| [`examples/task`](examples/task) | 后台定时任务：一次性/周期/每日排程、无界面触发、`ctx.done()` 与超时 |
+| [`examples/native-echo`](examples/native-echo) | 原生插件：C ABI、同步 `greet`、跨线程 `greet_later`、构建期 ELF 校验 |
 
 ```bat
 cd examples\led-banner
@@ -146,7 +149,7 @@ docs/  NOTICE  README.md
 
 ## 从源码构建
 
-需要 Go 1.24+。生成完整发行包还需要 JDK 17+ 与 Android SDK（platform 35 + build-tools）：
+需要 Go 1.24+。生成完整发行包还需要 JDK 17+、Android SDK（platform 35 + build-tools）与 NDK（编译三 ABI JNI shim，CI 固定 r26b / `26.1.10909125`）：
 
 ```powershell
 go test ./...
@@ -158,6 +161,8 @@ Linux/macOS 可使用 shell 版本（仅打包当前平台）：
 ```bash
 VERSION=0.1.0 ANDROID_SDK_ROOT=/path/to/sdk scripts/package-dist.sh
 ```
+
+NDK 通过 `ANDROID_NDK_ROOT` / `ANDROID_NDK_HOME` 指定，或放在 `$SDK/ndk/<版本>` 下自动探测；缺少 NDK 时 shell 构建只告警并跳过 shim，普通项目照常，但 `scripts/package-dist.*` 与 `berba release` 会因缺少三 ABI shim 失败。
 
 Android shell 单独构建：
 
@@ -175,7 +180,7 @@ scripts\build-shell.ps1 -Sdk C:\Android\Sdk -Out payload
 
 ## 限制
 
-- 仅支持 ARM 原生库占位（当前 shell 无 `.so`），不支持原生插件热插拔。
+- 支持原生插件（C ABI v1，`arm64-v8a`/`armeabi-v7a`/`x86_64`）：插件需静态链接 STL，不能热插拔；构建 JNI shim 需要 NDK（本地可选、发行必需）。
 - Lua 为 LuaJ 3.0.1（Lua 5.2 语义、无 JIT），定位为胶水逻辑，不适合重计算。
 - 不提供 Google Play/AAB、v1/v3 签名或 iOS 产物。
 - 构建机需要能运行 `tools/aapt2.exe`；发行包不包含 adb。
@@ -186,7 +191,10 @@ scripts\build-shell.ps1 -Sdk C:\Android\Sdk -Out payload
 | --- | --- |
 | [docs/config.md](docs/config.md) | `app.json` 字段与解析规则 |
 | [docs/lua-api.md](docs/lua-api.md) | Lua API、桥协议与事件 |
+| [docs/capabilities.md](docs/capabilities.md) | 能力与 API 清单（由规格自动生成） |
+| [docs/migration.md](docs/migration.md) | 运行时语义与能力开关的迁移样例 |
 | [docs/build.md](docs/build.md) | 构建流程、`dev`/`watch` 与故障排查 |
+| [docs/native-plugins.md](docs/native-plugins.md) | 原生插件：C ABI、构建、打包与安全边界 |
 | [docs/security.md](docs/security.md) | 安全模型与能力白名单 |
 | [docs/testing.md](docs/testing.md) | 测试策略与发布前验收清单 |
 

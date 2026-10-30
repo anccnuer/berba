@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Native Echo</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Native Echo</h1>
+      <p>Lua 调用 C 插件：同步 greet 与跨线程 greet_later。</p>
+    </header>
+
+    <label for="name">名字</label>
+    <input id="name" value="berba" autocomplete="off">
+
+    <section class="actions">
+      <button id="greet">同步 greet</button>
+      <button id="greetLater">异步 greet_later</button>
+      <button id="list">native.list()</button>
+    </section>
+
+    <pre id="out" aria-live="polite">等待调用…</pre>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

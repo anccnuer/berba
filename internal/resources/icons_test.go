@@ -145,6 +145,40 @@ func TestGenerateAdaptiveIcon(t *testing.T) {
 	}
 }
 
+func TestGenerateNotificationIcon(t *testing.T) {
+	resDir := t.TempDir()
+	if err := GenerateNotificationIcon(resDir); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]int{
+		"drawable-mdpi":    24,
+		"drawable-hdpi":    36,
+		"drawable-xhdpi":   48,
+		"drawable-xxhdpi":  72,
+		"drawable-xxxhdpi": 96,
+	}
+	for dir, size := range want {
+		f, err := os.Open(filepath.Join(resDir, dir, "ic_stat_berba.png"))
+		if err != nil {
+			t.Fatalf("%s: %v", dir, err)
+		}
+		img, err := png.Decode(f)
+		f.Close()
+		if err != nil {
+			t.Fatalf("%s: %v", dir, err)
+		}
+		if b := img.Bounds(); b.Dx() != size || b.Dy() != size {
+			t.Fatalf("%s: got %dx%d, want %dx%d", dir, b.Dx(), b.Dy(), size, size)
+		}
+		if c := rgbaAt(img, 0, 0); c.A != 0 {
+			t.Fatalf("%s: corner should be transparent, got %+v", dir, c)
+		}
+		if c := rgbaAt(img, size/2, size/2); c.R != 255 || c.G != 255 || c.B != 255 || c.A != 255 {
+			t.Fatalf("%s: center should be opaque white, got %+v", dir, c)
+		}
+	}
+}
+
 func TestGenerateRejectsBrokenIcon(t *testing.T) {
 	dir := t.TempDir()
 	iconPath := filepath.Join(dir, "icon.png")

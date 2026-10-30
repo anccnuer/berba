@@ -4,9 +4,11 @@
 
 所有 Lua 回调在单一 Lua 工作线程执行；`ui`、`web`、`app.exit` 等 UI 操作会自动切到主线程。耗时操作用 `http`（内部线程池）或 `file`（同步，限制 8MB）。
 
+运行时是**进程级单例**：入口只执行一次，Activity 重建（旋转、语言切换等）不会重新执行入口。没有前台界面时，`ui`、`web`、`app.exit`、`device.clipboard`、`device.share`、`device.openUrl`、`device.orientation`、`permission.request` 会报“当前没有前台界面”；`file`、`store`、`http`、`permission.check`、`notify.*`、`task.*`、`native.*` 等后台 API 仍可用。Activity 销毁不会取消在途 HTTP。按能力开关安装模块：未启用的 `notify`/`task`/`native` 对应模块不存在。旧项目的适配样例见 [迁移说明](migration.md)。
+
 ## 入口与 require
 
-入口文件默认 `lua/main.lua`，启动时执行一次。`require("a.b")` 会依次查找：
+入口文件默认 `lua/main.lua`，进程启动时执行一次。`require("a.b")` 会依次查找：
 
 ```
 assets/lua/a/b.lua
@@ -23,12 +25,15 @@ assets/lua/a/b/init.lua
 
 | 事件 | 参数 | 说明 |
 | --- | --- | --- |
-| `create` | 无 | Lua 就绪后触发。所有 `create` 回调执行完，若没有调用 `web.load`，会自动加载 `startUrl` |
+| `boot` | 无 | 进程启动后、入口执行完触发一次；此时通常还没有前台界面 |
+| `create` | 无 | 每次 Activity 绑定后触发。所有 `create` 回调执行完，若没有调用 `web.load`，会自动加载 `startUrl` |
 | `pause` | 无 | Activity `onPause` |
 | `resume` | 无 | Activity `onResume` |
-| `destroy` | 无 | Activity 销毁前 |
+| `destroy` | 无 | 当前界面销毁时触发；Lua 运行时继续存活，在途 HTTP 不会被取消 |
 | `back` | 无 | 返回键。返回 `true` 表示已处理；否则交给 WebView 历史，最后退出 |
 | `newIntent` | `url` | 深链唤起（配置 `deepLinks`）。冷启动时会在 `create` 之后补发 |
+| `notification` | `{ id, data, coldStart }` | 用户点击本地通知（需要 `notify` 能力）。`id`/`data` 来自 `notify.show`；`coldStart` 表示进程此前没有绑定过界面（通常即冷启动）。冷启动在 `create` 之后触发 |
+| `task` | `ctx` | 后台定时任务触发（需要 `task` 能力），无前台界面也会执行。`ctx` 含 `name`、`data`、`scheduledAt`、`firedAt`、`late`、`runId`、`done()`；必须调用 `ctx.done()` 或等待超时 |
 
 多个同事件处理器都会执行，按注册顺序。
 
@@ -47,11 +52,11 @@ end)
 
 ### `app.exit()`
 
-结束当前 Activity。
+结束当前 Activity。Lua 运行时与后台任务（例如在途 `http`）继续存活，之后仍可通过深链或通知重新附着界面。
 
 ### `app.info()`
 
-返回表：`name`、`package`、`versionName`、`versionCode`、`sdk`、`platform`（固定 `"android"`）。
+返回表：`name`、`package`、`versionName`、`versionCode`、`sdk`、`platform`（固定 `"android"`）、`foreground`（当前是否有前台界面）。
 
 ## web
 
@@ -206,6 +211,136 @@ end)
 
 权限必须先写入 `app.json` 的 `permissions`，运行时申请才有意义。
 
+## notify
+
+需要 `app.json` 的 `capabilities` 包含 `"notify"`。该能力会自动写入 `POST_NOTIFICATIONS` 权限，并在 API 33+ 仍需运行时申请；`notify.*` 不要求前台界面。
+
+| 方法 | 说明 |
+| --- | --- |
+| `notify.show(opts)` / `notify.show(title, body)` | 显示或替换通知；成功返回 id，失败返回 `nil, err` |
+| `notify.cancel(id)` | 取消指定通知，返回原本是否存在 |
+| `notify.cancelAll()` | 取消本应用全部通知 |
+| `notify.enabled()` | 通知权限与系统通知开关均可用时返回 `true`；为 `false` 时 `show` 返回 `nil, "通知权限未授予"` |
+| `notify.channel(opts)` | 创建或更新通知通道（API 26+；低版本 no-op） |
+
+`notify.show` 选项：
+
+| 字段 | 类型 | 默认 | 说明 |
+| --- | --- | --- | --- |
+| `id` | string / 正整数 | 自增 | 字符串 id 映射为通知 tag（同 id 替换）；数字 id 映射为 notificationId |
+| `title` | string | 应用名 | ≤ 512 字符 |
+| `body` | string | 空 | ≤ 8192 字符 |
+| `channel` | string | `"default"` | 通道 id：1-64 字符，仅字母、数字、`_ - .`；缺失时自动创建 |
+| `data` | 任意 JSON 值 | `nil` | 随点击事件返回；序列化后 ≤ 64KB |
+| `ongoing` | bool | `false` | 常驻通知，用户不能直接划掉 |
+| `autoCancel` | bool | `true` | 点击后自动移除 |
+
+`notify.channel` 选项：`id`、`name`、`description`、`importance`（`min` / `low` / `default` / `high`）。通道创建后重要性由系统固定，后续调用只更新名称与描述。
+
+点击通知会打开 `MainActivity` 并触发 `app.on("notification")`：热启动立即送达；冷启动在 `create` 之后送达，`coldStart = true`。每次有效点击只送达一次；token 或 payload 不合法（被其他应用伪造、缺少字段、超过 64KB）会被丢弃并记日志。
+
+```lua
+app.on("create", function()
+  permission.request("POST_NOTIFICATIONS", function(result)
+    if not result["android.permission.POST_NOTIFICATIONS"] then
+      log("通知权限被拒绝")
+    end
+  end)
+end)
+
+app.on("notification", function(event)
+  log("clicked", event.id, json.encode(event.data), tostring(event.coldStart))
+end)
+
+local id, err = notify.show({
+  id = "daily",
+  title = "今天也要加油",
+  body = "点击回到应用",
+  channel = "default",
+  data = { from = "lua" }
+})
+```
+
+通知小图标由构建在能力启用时生成（`drawable-*/ic_stat_berba.png`），无需在 `www/` 或 `lua/` 中提供。启用 `notify` 会让 Activity 使用 `launchMode="singleTask"`，保证点击走 `onNewIntent`。
+
+## task
+
+需要 `app.json` 的 `capabilities` 包含 `"task"`。该能力会自动加入 `RECEIVE_BOOT_COMPLETED` 与 `SCHEDULE_EXACT_ALARM`，并在 Manifest 中注册 `TaskJobService`、`TaskAlarmReceiver`、`TaskBootReceiver`；`task.*` 不要求前台界面。
+
+| 方法 | 说明 |
+| --- | --- |
+| `task.schedule(name, opts)` | 创建或替换任务；成功返回任务信息表，失败返回 `nil, err` |
+| `task.cancel(name)` | 取消任务并移除闹钟与待运行 Job，返回原本是否存在 |
+| `task.list()` | 返回按名称排序的任务数组 |
+| `task.exact()` | 当前是否允许精确闹钟（`canScheduleExactAlarms`；API 31 以下恒为 `true`） |
+
+名字需匹配 `^[A-Za-z_][A-Za-z0-9_.-]{0,63}$`。`opts`：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `every` / `daily` / `delay` | number / string / number | 三选一。`every` 为间隔秒数，最小 900；`daily` 为 24 小时制 `HH:MM`；`delay` 为一次性延时秒数 |
+| `data` | 任意 JSON 值 | 随 `app.on("task")` 返回；序列化后 ≤ 64KB，明文存储，**不要放密钥** |
+| `exact` | bool | 请求精确闹钟；系统未授权时自动降级为非精确并记警告 |
+| `timeout` | number | 本次运行上限，10-600 秒，默认 60 |
+| `replace` | bool | 同名任务是否存在时替换，默认 `true`；为 `false` 时返回错误 |
+
+限制：最多 64 个任务；`every`/`delay` 上限 30 天。返回信息表与 `task.list()` 元素包含 `name`、`kind`（`every`/`daily`/`delay`）、`nextRun`（epoch 秒）、`runId`、`exact`、`timeout`、`done` 及对应的 `every`/`daily`/`delay`。无任务时 `task.list()` 为空表，经桥或 `json.encode` 编码为 `{}`，前端请用 `Array.isArray`/`Object.keys` 判断。
+
+任务触发时 `app.on("task")` 收到 `ctx`：
+
+| 字段 | 说明 |
+| --- | --- |
+| `name` / `data` | 任务名与排程时写入的 `data` |
+| `scheduledAt` / `firedAt` | 计划触发与实际触发的 epoch 秒 |
+| `late` | 实际触发比计划晚超过 60 秒 |
+| `runId` | 本次运行的递增编号，可用于去重 |
+| `done()` | 结束本次运行；重复调用安全。不调用则等待 `timeout` |
+
+执行语义：
+
+- 每次闹钟触发后先推进 `runId` 与下一次 `nextRun` 并重排闹钟，再入队 Job；Job 未运行也不影响下一次。
+- Handler 返回**不代表完成**：必须调用 `ctx.done()`，或在超时后由壳结束 Job。异步 `http` 回调中调用 `done()` 是支持的。
+- 同一任务不会重放积压：开机、应用更新、改时间/时区后过期任务只补一次并标记 `late`。
+- `exact` 只影响闹钟精度；JobScheduler 的执行时间仍是 best-effort（API 31+ 会尝试 expedited Job，仍受系统配额限制）。
+- force-stop 会取消闹钟；Doze 与厂商省电策略下触发可能延迟。没有前台服务，也没有推送。
+
+```lua
+local info, err = task.schedule("sync", {
+  every = 900,
+  data = { since = 123 },
+  timeout = 60,
+  replace = true
+})
+
+app.on("task", function(ctx)
+  if ctx.name == "sync" then
+    http.request({
+      url = "https://example.com/sync",
+      cb = function() ctx.done() end
+    })
+  else
+    ctx.done()
+  end
+end)
+
+task.cancel("sync")
+```
+
+## native
+
+需要 `capabilities` 包含 `"native"`，并在 `app.json` 的 `native.plugins` 中声明插件。每个插件按 `spec.json` 暴露 `native.<module>.<function>`；未声明的模块/函数不可见。插件在应用启动时加载，失败时对应函数替换为抛错桩，其他插件继续可用。
+
+| 方法 | 说明 |
+| --- | --- |
+| `native.list()` | 返回已加载插件数组；元素含 `name`、`lib`、`ok`、`error`（失败时）与 `modules`（函数及 `async` 标记） |
+| `native.<module>.<fn>(args)` | 同步函数；参数/结果均为 JSON。成功返回解析后的 Lua 值，失败返回 `nil, err` |
+| `native.<module>.<fn>(args, callback)` | 异步函数；回调签名为 `callback(result, err)`，在 Lua 线程执行 |
+
+- 参数上限 1MB、结果上限 8MB、`config` 上限 64KB；异步并发上限 256、超时 30 秒。
+- 同步调用在 Lua 线程执行，插件必须快速返回；耗时工作应声明为 `async`。
+- 结果按 JSON 解析；非 JSON 结果按字符串返回；`null` 映射为 `nil`。
+- 开发期：`native` 表存在但函数抛“原生插件仅在设备上可用”。ABI、构建与示例见 [native-plugins.md](native-plugins.md)。
+
 ## ui
 
 | 方法 | 说明 |
@@ -281,4 +416,4 @@ shim 的注入方式：本地 HTML 响应会在 `<head>` 前插入脚本标签�
 - `alert` / `confirm` / `prompt` 使用原生对话框；`console.*` 写入 Logcat（tag `berba`，前缀 `[js]`）。
 - 多窗口禁用：`window.open` 与 `target="_blank"` 不会打开新页面；跳转请用 `web.load`（Lua 侧）或同页导航。
 - `getUserMedia` 与 `navigator.geolocation` 不可依赖；需要相机/定位请走 Lua `permission` + 自有实现。
-- 浏览器调试：`berba dev` 会在浏览器里用 fengari（Lua 5.3）真实执行 `lua/main.lua`，`bridge.register` 的方法可直接被页面调用，`dev/mock.js` 仍可覆盖单个方法。与设备（LuaJ，Lua 5.2）的差异：`bit32` 已补齐；`permission` 一律视为已授权；`store`/`file` 落在 `localStorage`；`http` 受浏览器 CORS 限制；`app.on("back")` 需手动调用 `window.__berbaDev.back()`。完整列表见 [build.md](build.md)。
+- 浏览器调试：`berba dev` 会在浏览器里用 fengari（Lua 5.3）真实执行 `lua/main.lua`，`bridge.register` 的方法可直接被页面调用，`dev/mock.js` 仍可覆盖单个方法。浏览器运行时按 `app.json` 的 `capabilities` 装载模块与事件白名单：未声明 `notify`/`task`/`native` 时对应的表不存在，`app.on("notification")`/`app.on("task")` 也会被判为未知事件，与设备一致。与设备（LuaJ，Lua 5.2）的其他差异：`bit32` 已补齐；除通知外的 `permission` 视为已授权；`notify` 使用 Web Notifications（无通道、页面关闭后点击不再回调，可用 `window.__berbaDev.notify(id, data)` 手动触发）；`task` 只能注册 `app.on("task")`，`task.schedule` 直接报“浏览器不支持后台任务”；`native.list()` 返回 `app.json` 声明的插件与函数（`ok=false`），插件函数抛“原生插件仅在设备上可用”；`store`/`file` 落在 `localStorage`；`http` 受浏览器 CORS 限制；`app.on("back")` 需手动调用 `window.__berbaDev.back()`。完整列表见 [build.md](build.md)。

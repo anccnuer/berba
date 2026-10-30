@@ -1,6 +1,5 @@
 package com.berba.shell;
 
-import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.AlertDialog;
@@ -8,7 +7,6 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
-import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
 import android.content.res.Configuration;
 import android.graphics.Color;
@@ -18,9 +16,6 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
-import android.os.VibrationEffect;
-import android.os.Vibrator;
-import android.os.VibratorManager;
 import android.util.Log;
 import android.view.View;
 import android.view.Window;
@@ -56,20 +51,19 @@ import java.util.Map;
  */
 public class MainActivity extends Activity {
     private static final String TAG = "berba";
-    private static final String PREFS = "berba";
     private static final int FILE_CHOOSER_REQUEST = 2001;
 
+    private RuntimeManager manager;
+    private UiSession session;
     private AppConfig config;
     private WebView webView;
     private JsBridge bridge;
     private LuaRuntime lua;
-    private SharedPreferences prefs;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final Map<Integer, PermRequest> pendingPermissions = new HashMap<>();
     private int nextRequestCode = 1001;
     private volatile boolean luaLoadRequested;
     private boolean fullscreen;
-    private boolean luaReady;
     private boolean resumed;
     private volatile String pageOrigin = "";
     private volatile String pendingDeepLink = "";
@@ -123,19 +117,22 @@ public class MainActivity extends Activity {
     }
 
     private void setup() {
-        config = AppConfig.load(this);
-        prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        manager = RuntimeManager.get(this);
+        config = manager.config();
+        lua = manager.runtime();
 
         FrameLayout root = new FrameLayout(this);
         webView = WebViewGuard.create(this);
         webView.setLayoutParams(new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
         configureWebView();
-        lua = new LuaRuntime(this, config);
-        bridge = new JsBridge(this, lua);
+        manager.captureNotification(getIntent());
+        pendingDeepLink = deepLinkUrl(getIntent());
+        session = manager.attach(this, this::onSessionCreated);
+        bridge = new JsBridge(session);
         webView.addJavascriptInterface(bridge, JsBridge.NAME);
-        webView.setWebViewClient(new AssetServer(this, config, bridge));
-        webView.setWebChromeClient(new BridgeChromeClient(this));
+        webView.setWebViewClient(new AssetServer(session, config, bridge));
+        webView.setWebChromeClient(new BridgeChromeClient(session));
         webView.setDownloadListener((url, userAgent, contentDisposition, mimeType, contentLength)
                 -> handleDownload(url));
         root.addView(webView);
@@ -145,18 +142,16 @@ public class MainActivity extends Activity {
         // 在 mDecor 为 null 时会直接 NPE。
         setupWindow();
         registerBackCallback();
-
-        pendingDeepLink = deepLinkUrl(getIntent());
-        lua.start(this::onLuaReady);
     }
 
     /** 启动期异常没有 WebView/Lua 可用，用纯文本页展示堆栈，便于无 adb 时截图反馈。 */
     private void showFatalError(Throwable error) {
         try {
-            if (lua != null) {
-                lua.shutdown();
-                lua = null;
+            if (manager != null && session != null) {
+                manager.detach(session);
+                session = null;
             }
+            lua = null;
             if (webView != null) {
                 webView.removeJavascriptInterface(JsBridge.NAME);
                 webView.destroy();
@@ -313,25 +308,25 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void onLuaReady() {
-        if (lua == null) {
+    /** create 事件完成后再加载 startUrl（若 Lua 侧未主动 web.load）。 */
+    private void onSessionCreated() {
+        if (session == null || !session.isCurrent() || lua == null) {
             return;
         }
-        luaReady = true;
-        lua.onAppEvent("create", () -> {
-            if (!luaLoadRequested && webView != null) {
-                webView.loadUrl(config.startUrl);
-            }
-            if (resumed && lua != null) {
-                lua.onAppEvent("resume");
-            }
-            deliverDeepLink();
-        });
+        if (!luaLoadRequested && webView != null) {
+            webView.loadUrl(config.startUrl);
+        }
+        if (resumed) {
+            lua.onAppEvent("resume");
+        }
+        deliverDeepLink();
+        manager.deliverNotifications(lua);
     }
 
     private void deliverDeepLink() {
         String url = pendingDeepLink;
-        if (url == null || url.isEmpty() || lua == null) {
+        if (url == null || url.isEmpty() || lua == null
+                || session == null || !session.isCurrent()) {
             return;
         }
         pendingDeepLink = "";
@@ -342,11 +337,17 @@ public class MainActivity extends Activity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
+        if (manager != null && manager.captureNotification(intent)) {
+            if (lua != null && session != null && session.isCurrent()) {
+                manager.deliverNotifications(lua);
+            }
+            return;
+        }
         String url = deepLinkUrl(intent);
         if (url.isEmpty()) {
             return;
         }
-        if (luaReady && lua != null) {
+        if (lua != null && session != null && session.isCurrent()) {
             lua.onAppEvent("newIntent", LuaValue.valueOf(url));
         } else {
             pendingDeepLink = url;
@@ -358,7 +359,10 @@ public class MainActivity extends Activity {
             return "";
         }
         Uri data = intent.getData();
-        return data == null ? "" : data.toString();
+        if (data == null || NotifyController.NOTIFY_SCHEME.equalsIgnoreCase(data.getScheme())) {
+            return "";
+        }
+        return data.toString();
     }
 
     @Override
@@ -368,7 +372,7 @@ public class MainActivity extends Activity {
         if (webView != null) {
             webView.onPause();
         }
-        if (luaReady && lua != null) {
+        if (lua != null && session != null && session.isCurrent()) {
             lua.onAppEvent("pause");
         }
     }
@@ -387,7 +391,7 @@ public class MainActivity extends Activity {
         if (webView != null) {
             webView.onResume();
         }
-        if (luaReady && lua != null) {
+        if (lua != null && session != null && session.isCurrent()) {
             lua.onAppEvent("resume");
         }
     }
@@ -398,10 +402,18 @@ public class MainActivity extends Activity {
             BackApi33.unregister(this, backRegistration);
             backRegistration = null;
         }
-        // 先让 Lua 收到 destroy，再销毁 WebView，避免 Lua 侧访问已释放的宿主。
-        if (lua != null) {
-            lua.shutdown();
-            lua = null;
+        // 只解绑当前界面；Lua 运行时与在途 HTTP 在进程内继续存活。
+        if (manager != null && session != null) {
+            manager.detach(session);
+            session = null;
+        }
+        lua = null;
+        synchronized (pendingPermissions) {
+            pendingPermissions.clear();
+        }
+        if (pendingFileChooser != null) {
+            pendingFileChooser.onReceiveValue(null);
+            pendingFileChooser = null;
         }
         if (webView != null) {
             webView.removeJavascriptInterface(JsBridge.NAME);
@@ -441,6 +453,9 @@ public class MainActivity extends Activity {
     }
 
     private void defaultBack() {
+        if (!uiActive()) {
+            return;
+        }
         if (webView != null && webView.canGoBack()) {
             webView.goBack();
         } else {
@@ -448,12 +463,12 @@ public class MainActivity extends Activity {
         }
     }
 
-    AppConfig config() {
-        return config;
+    private boolean uiActive() {
+        return session != null && session.isCurrent();
     }
 
-    SharedPreferences prefs() {
-        return prefs;
+    AppConfig config() {
+        return config;
     }
 
     // ---- 页面状态 ----
@@ -485,24 +500,27 @@ public class MainActivity extends Activity {
             throw new IllegalArgumentException("origin 不在白名单: " + origin);
         }
         luaLoadRequested = true;
+        final UiSession s = session;
         runOnUiThread(() -> {
-            if (webView != null) {
+            if (s != null && s.isCurrent() && webView != null) {
                 webView.loadUrl(url);
             }
         });
     }
 
     void reloadOnMain() {
+        final UiSession s = session;
         runOnUiThread(() -> {
-            if (webView != null) {
+            if (s != null && s.isCurrent() && webView != null) {
                 webView.reload();
             }
         });
     }
 
     void goBackOnMain() {
+        final UiSession s = session;
         runOnUiThread(() -> {
-            if (webView != null && webView.canGoBack()) {
+            if (s != null && s.isCurrent() && webView != null && webView.canGoBack()) {
                 webView.goBack();
             }
         });
@@ -513,13 +531,18 @@ public class MainActivity extends Activity {
     }
 
     void evaluateJs(final String script, final LuaValue callback) {
+        final UiSession s = session;
+        final LuaRuntime runtime = lua;
         runOnUiThread(() -> {
-            if (webView == null) {
+            if (s == null || !s.isCurrent() || webView == null) {
                 return;
             }
             webView.evaluateJavascript(script, value -> {
-                if (callback != null && lua != null) {
-                    lua.post(() -> {
+                if (callback != null && runtime != null) {
+                    runtime.post(() -> {
+                        if (!s.isCurrent()) {
+                            return;
+                        }
                         try {
                             callback.invoke(LuaValue.valueOf(value == null ? "null" : value));
                         } catch (Throwable t) {
@@ -532,8 +555,9 @@ public class MainActivity extends Activity {
     }
 
     void deliverBridgeResult(final String reqId, final boolean ok, final String payload) {
+        final UiSession s = session;
         runOnUiThread(() -> {
-            if (webView == null) {
+            if (s == null || !s.isCurrent() || webView == null) {
                 return;
             }
             String js = "window.__berbaResolve(" + JSONObject.quote(reqId) + ","
@@ -544,19 +568,19 @@ public class MainActivity extends Activity {
     }
 
     void onPageStartedEvent(final String url) {
-        if (lua != null) {
+        if (lua != null && uiActive()) {
             lua.onAppEvent("pageStarted", LuaValue.valueOf(url));
         }
     }
 
     void onPageFinishedEvent(final String url) {
-        if (lua != null) {
+        if (lua != null && uiActive()) {
             lua.onAppEvent("pageFinished", LuaValue.valueOf(url));
         }
     }
 
     void onWebErrorEvent(final String description, final String url) {
-        if (lua != null) {
+        if (lua != null && uiActive()) {
             lua.onAppEvent("error", LuaValue.valueOf(description), LuaValue.valueOf(url));
         }
     }
@@ -564,12 +588,21 @@ public class MainActivity extends Activity {
     // ---- UI ----
 
     void toastOnMain(final String message, final boolean longDuration) {
-        runOnUiThread(() -> Toast.makeText(this, message,
-                longDuration ? Toast.LENGTH_LONG : Toast.LENGTH_SHORT).show());
+        final UiSession s = session;
+        runOnUiThread(() -> {
+            if (s != null && s.isCurrent()) {
+                Toast.makeText(this, message,
+                        longDuration ? Toast.LENGTH_LONG : Toast.LENGTH_SHORT).show();
+            }
+        });
     }
 
     void setStatusBarOnMain(final int color, final boolean light) {
+        final UiSession s = session;
         runOnUiThread(() -> {
+            if (s == null || !s.isCurrent()) {
+                return;
+            }
             statusBarCustom = true;
             statusBarColor = color;
             statusBarLight = light;
@@ -578,8 +611,9 @@ public class MainActivity extends Activity {
     }
 
     void showAlert(final String message) {
+        final UiSession s = session;
         runOnUiThread(() -> {
-            if (isFinishing()) {
+            if (s == null || !s.isCurrent() || isFinishing()) {
                 return;
             }
             new AlertDialog.Builder(this)
@@ -590,24 +624,29 @@ public class MainActivity extends Activity {
     }
 
     void showConfirm(final String message, final LuaValue callback) {
+        final UiSession s = session;
         runOnUiThread(() -> {
-            if (isFinishing()) {
+            if (s == null || !s.isCurrent() || isFinishing()) {
                 return;
             }
             new AlertDialog.Builder(this)
                     .setMessage(message)
-                    .setPositiveButton(android.R.string.ok, (d, w) -> replyConfirm(callback, true))
-                    .setNegativeButton(android.R.string.cancel, (d, w) -> replyConfirm(callback, false))
-                    .setOnCancelListener(d -> replyConfirm(callback, false))
+                    .setPositiveButton(android.R.string.ok, (d, w) -> replyConfirm(s, callback, true))
+                    .setNegativeButton(android.R.string.cancel, (d, w) -> replyConfirm(s, callback, false))
+                    .setOnCancelListener(d -> replyConfirm(s, callback, false))
                     .show();
         });
     }
 
-    private void replyConfirm(final LuaValue callback, final boolean value) {
-        if (callback == null || lua == null) {
+    private void replyConfirm(final UiSession s, final LuaValue callback, final boolean value) {
+        final LuaRuntime runtime = lua;
+        if (callback == null || runtime == null || s == null || !s.isCurrent()) {
             return;
         }
-        lua.post(() -> {
+        runtime.post(() -> {
+            if (!s.isCurrent()) {
+                return;
+            }
             try {
                 callback.invoke(value ? LuaValue.TRUE : LuaValue.FALSE);
             } catch (Throwable t) {
@@ -617,8 +656,9 @@ public class MainActivity extends Activity {
     }
 
     void showJsAlert(final String message, final JsResult result) {
+        final UiSession s = session;
         runOnUiThread(() -> {
-            if (isFinishing() || isDestroyed()) {
+            if (s == null || !s.isCurrent() || isFinishing() || isDestroyed()) {
                 result.cancel();
                 return;
             }
@@ -631,8 +671,9 @@ public class MainActivity extends Activity {
     }
 
     void showJsConfirm(final String message, final JsResult result) {
+        final UiSession s = session;
         runOnUiThread(() -> {
-            if (isFinishing() || isDestroyed()) {
+            if (s == null || !s.isCurrent() || isFinishing() || isDestroyed()) {
                 result.cancel();
                 return;
             }
@@ -646,8 +687,9 @@ public class MainActivity extends Activity {
     }
 
     void showJsPrompt(final String message, final String defaultValue, final JsPromptResult result) {
+        final UiSession s = session;
         runOnUiThread(() -> {
-            if (isFinishing() || isDestroyed()) {
+            if (s == null || !s.isCurrent() || isFinishing() || isDestroyed()) {
                 result.cancel();
                 return;
             }
@@ -669,11 +711,20 @@ public class MainActivity extends Activity {
     }
 
     void finishOnMain() {
-        runOnUiThread(this::finish);
+        final UiSession s = session;
+        runOnUiThread(() -> {
+            if (s != null && s.isCurrent()) {
+                finish();
+            }
+        });
     }
 
     void setFullscreenOnMain(final boolean on) {
+        final UiSession s = session;
         runOnUiThread(() -> {
+            if (s == null || !s.isCurrent()) {
+                return;
+            }
             fullscreen = on;
             applyFullscreen(on);
         });
@@ -713,7 +764,11 @@ public class MainActivity extends Activity {
     }
 
     void setKeepScreenOnOnMain(final boolean on) {
+        final UiSession s = session;
         runOnUiThread(() -> {
+            if (s == null || !s.isCurrent()) {
+                return;
+            }
             if (on) {
                 getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
             } else {
@@ -740,14 +795,15 @@ public class MainActivity extends Activity {
             default:
                 throw new IllegalArgumentException("未知方向: " + mode);
         }
-        runOnUiThread(() -> setRequestedOrientation(orientation));
+        final UiSession s = session;
+        runOnUiThread(() -> {
+            if (s != null && s.isCurrent()) {
+                setRequestedOrientation(orientation);
+            }
+        });
     }
 
     // ---- 权限 ----
-
-    boolean hasPermission(String name) {
-        return checkSelfPermission(name) == android.content.pm.PackageManager.PERMISSION_GRANTED;
-    }
 
     void requestPermissionsFromLua(final List<String> names, final LuaValue callback) {
         final int code;
@@ -755,7 +811,12 @@ public class MainActivity extends Activity {
             code = nextRequestCode++;
             pendingPermissions.put(code, new PermRequest(names, callback));
         }
-        runOnUiThread(() -> requestPermissions(names.toArray(new String[0]), code));
+        final UiSession s = session;
+        runOnUiThread(() -> {
+            if (s != null && s.isCurrent()) {
+                requestPermissions(names.toArray(new String[0]), code);
+            }
+        });
     }
 
     @Override
@@ -773,8 +834,13 @@ public class MainActivity extends Activity {
             result.set(permissions[i], grantResults[i] == android.content.pm.PackageManager.PERMISSION_GRANTED
                     ? LuaValue.TRUE : LuaValue.FALSE);
         }
-        if (req.callback != null && lua != null) {
-            lua.post(() -> {
+        final LuaRuntime runtime = lua;
+        final UiSession s = session;
+        if (req.callback != null && runtime != null && s != null && s.isCurrent()) {
+            runtime.post(() -> {
+                if (!s.isCurrent()) {
+                    return;
+                }
                 try {
                     req.callback.invoke(result);
                 } catch (Throwable t) {
@@ -785,8 +851,9 @@ public class MainActivity extends Activity {
     }
 
     void openFileChooser(final ValueCallback<Uri[]> callback, final Intent intent) {
+        final UiSession s = session;
         runOnUiThread(() -> {
-            if (isFinishing() || isDestroyed()) {
+            if (s == null || !s.isCurrent() || isFinishing() || isDestroyed()) {
                 callback.onReceiveValue(null);
                 return;
             }
@@ -811,6 +878,10 @@ public class MainActivity extends Activity {
             ValueCallback<Uri[]> callback = pendingFileChooser;
             pendingFileChooser = null;
             if (callback == null) {
+                return;
+            }
+            if (!uiActive()) {
+                callback.onReceiveValue(null);
                 return;
             }
             Uri[] result = null;
@@ -847,38 +918,17 @@ public class MainActivity extends Activity {
     }
 
     boolean setClipboardTextOnMain(final String text) {
-        if (text == null) {
+        final UiSession s = session;
+        if (text == null || s == null || !s.isCurrent()) {
             return false;
         }
         runOnUiThread(() -> {
+            if (!s.isCurrent()) {
+                return;
+            }
             ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
             if (cm != null) {
                 cm.setPrimaryClip(ClipData.newPlainText("berba", text));
-            }
-        });
-        return true;
-    }
-
-    boolean vibrateOnMain(final long ms) {
-        if (!hasPermission(Manifest.permission.VIBRATE)) {
-            return false;
-        }
-        runOnUiThread(() -> {
-            Vibrator vibrator;
-            if (Build.VERSION.SDK_INT >= 31) {
-                VibratorManager manager =
-                        (VibratorManager) getSystemService(Context.VIBRATOR_MANAGER_SERVICE);
-                vibrator = manager == null ? null : manager.getDefaultVibrator();
-            } else {
-                vibrator = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
-            }
-            if (vibrator == null || !vibrator.hasVibrator()) {
-                return;
-            }
-            if (Build.VERSION.SDK_INT >= 26) {
-                vibrator.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE));
-            } else {
-                vibrator.vibrate(ms);
             }
         });
         return true;
@@ -896,7 +946,11 @@ public class MainActivity extends Activity {
             content.append(url);
         }
         final String payload = content.toString();
+        final UiSession s = session;
         runOnUiThread(() -> {
+            if (s == null || !s.isCurrent()) {
+                return;
+            }
             Intent send = new Intent(Intent.ACTION_SEND);
             send.setType("text/plain");
             send.putExtra(Intent.EXTRA_TEXT, payload);
@@ -922,7 +976,11 @@ public class MainActivity extends Activity {
             throw new IllegalArgumentException("只支持 http/https");
         }
         final Uri uri = Uri.parse(url);
+        final UiSession s = session;
         runOnUiThread(() -> {
+            if (s == null || !s.isCurrent()) {
+                return;
+            }
             Intent view = new Intent(Intent.ACTION_VIEW, uri);
             if (view.resolveActivity(getPackageManager()) == null) {
                 Toast.makeText(this, "没有可打开该链接的应用", Toast.LENGTH_SHORT).show();

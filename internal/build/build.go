@@ -8,15 +8,18 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
 
 	"berba/internal/aapt2"
 	"berba/internal/apk"
+	"berba/internal/capability"
 	"berba/internal/clierr"
 	"berba/internal/config"
 	"berba/internal/manifest"
+	"berba/internal/nativeplugin"
 	"berba/internal/payload"
 	"berba/internal/publish"
 	"berba/internal/resources"
@@ -101,12 +104,67 @@ func Build(ctx context.Context, opts Options) (result *Result, retErr error) {
 	}
 	isDebug := opts.Debug || proj.Config.Debug
 
+	registry, err := capability.LoadBuiltin()
+	if err != nil {
+		return nil, err
+	}
+	resolved, err := registry.Resolve(capability.Request{Capabilities: proj.Config.Capabilities})
+	if err != nil {
+		return nil, err
+	}
+	if resolved.RequiresLua && !proj.HasLua {
+		return nil, fmt.Errorf("启用的能力需要 Lua 运行时，但未找到有效的 lua 目录")
+	}
+
+	nativeRes := &nativeplugin.Result{}
+	if len(proj.NativePlugins) > 0 {
+		modules := make([]string, 0, len(resolved.Modules))
+		for _, m := range resolved.Modules {
+			modules = append(modules, m.Name)
+		}
+		nativeRes, err = nativeplugin.Resolve(nativeplugin.Request{
+			Plugins:        proj.NativePlugins,
+			BuiltinModules: modules,
+		})
+		if err != nil {
+			return nil, err
+		}
+		for _, w := range nativeRes.Warnings {
+			warn(w)
+		}
+		resolved.SetNativePlugins(nativeMetadata(nativeRes))
+	}
+
 	if err := step(2, "定位工具链"); err != nil {
 		return nil, err
 	}
 	layout, err := payload.Locate(opts.Home)
 	if err != nil {
 		return nil, err
+	}
+	for _, name := range resolved.Capabilities {
+		if !layout.Supports(name) {
+			return nil, fmt.Errorf("当前 payload 不支持能力 %q（请更新发行包或重新构建 shell）", name)
+		}
+	}
+	if len(nativeRes.Plugins) > 0 {
+		if layout.Shell == nil || layout.Shell.NativeABIVersion < capability.NativeABIVersion {
+			return nil, fmt.Errorf("当前 payload 不支持原生插件 ABI v%d（请更新发行包）", capability.NativeABIVersion)
+		}
+		for _, abi := range nativeRes.ABIs {
+			shim, ok := layout.Native[abi]
+			if !ok {
+				return nil, fmt.Errorf("payload 缺少 %s 的 JNI shim: payload/native/%s/%s", abi, abi, payload.NativeShimName)
+			}
+			if err := nativeplugin.ValidateShimELF(shim, abi); err != nil {
+				return nil, err
+			}
+			for _, plugin := range nativeRes.Plugins {
+				if err := nativeplugin.ValidateELF(plugin.Libs[abi], abi); err != nil {
+					return nil, fmt.Errorf("插件 %q: %w", plugin.Name, err)
+				}
+			}
+		}
 	}
 	runner := opts.Runner
 	if runner == nil {
@@ -129,7 +187,7 @@ func Build(ctx context.Context, opts Options) (result *Result, retErr error) {
 	if err := step(3, "渲染 Manifest 与资源"); err != nil {
 		return nil, err
 	}
-	manifestData, err := manifest.Render(proj, isDebug)
+	manifestData, err := manifest.RenderResolved(proj, isDebug, resolved)
 	if err != nil {
 		return nil, err
 	}
@@ -145,6 +203,16 @@ func Build(ctx context.Context, opts Options) (result *Result, retErr error) {
 	}
 	if err := resources.WriteStrings(resDir, proj.Config.Name); err != nil {
 		return nil, err
+	}
+	for _, resource := range resolved.Resources {
+		switch resource {
+		case "notification_icon":
+			if err := resources.GenerateNotificationIcon(resDir); err != nil {
+				return nil, fmt.Errorf("生成通知图标失败: %w", err)
+			}
+		default:
+			return nil, fmt.Errorf("未知的资源生成器: %q", resource)
+		}
 	}
 
 	if err := step(4, "运行 aapt2"); err != nil {
@@ -162,7 +230,7 @@ func Build(ctx context.Context, opts Options) (result *Result, retErr error) {
 	if err := step(5, "组装 APK"); err != nil {
 		return nil, err
 	}
-	extra, err := collectPayload(proj, layout, isDebug)
+	extra, err := collectPayload(proj, layout, isDebug, resolved, nativeRes)
 	if err != nil {
 		return nil, err
 	}
@@ -280,7 +348,7 @@ func Publish(distDir, fileName string, data []byte, verify func(tmpPath string) 
 	return finalPath, nil
 }
 
-func collectPayload(proj *config.Project, layout *payload.Layout, debug bool) ([]apk.Entry, error) {
+func collectPayload(proj *config.Project, layout *payload.Layout, debug bool, resolved *capability.Resolved, nativeRes *nativeplugin.Result) ([]apk.Entry, error) {
 	var entries []apk.Entry
 	for _, dex := range layout.Dexes {
 		data, err := os.ReadFile(dex)
@@ -295,6 +363,22 @@ func collectPayload(proj *config.Project, layout *payload.Layout, debug bool) ([
 			return nil, err
 		}
 		entries = append(entries, apk.Entry{Name: lib.Name, Data: data})
+	}
+	if nativeRes != nil {
+		for _, abi := range nativeRes.ABIs {
+			shim, err := os.ReadFile(layout.Native[abi])
+			if err != nil {
+				return nil, err
+			}
+			entries = append(entries, apk.Entry{Name: path.Join("lib", abi, payload.NativeShimName), Data: shim})
+			for _, plugin := range nativeRes.Plugins {
+				data, err := os.ReadFile(plugin.Libs[abi])
+				if err != nil {
+					return nil, err
+				}
+				entries = append(entries, apk.Entry{Name: path.Join("lib", abi, plugin.LibName), Data: data})
+			}
+		}
 	}
 
 	www, err := apk.DirEntries(proj.WebDir, "assets/www")
@@ -316,7 +400,30 @@ func collectPayload(proj *config.Project, layout *payload.Layout, debug bool) ([
 		return nil, err
 	}
 	entries = append(entries, apk.Entry{Name: "assets/app_config.json", Data: ac})
+
+	caps, err := resolved.RuntimeJSON()
+	if err != nil {
+		return nil, err
+	}
+	entries = append(entries, apk.Entry{Name: "assets/berba_capabilities.json", Data: caps})
 	return entries, nil
+}
+
+// nativeMetadata 把构建期插件结果转换为能力资产使用的元数据。
+func nativeMetadata(res *nativeplugin.Result) []capability.ResolvedNativePlugin {
+	out := make([]capability.ResolvedNativePlugin, 0, len(res.Plugins))
+	for _, p := range res.Plugins {
+		rp := capability.ResolvedNativePlugin{Name: p.Name, LibName: p.LibName, Config: p.Config}
+		for name, m := range p.Spec.Modules {
+			rm := capability.ResolvedNativeModule{Name: name}
+			for fn, f := range m.Functions {
+				rm.Functions = append(rm.Functions, capability.ResolvedNativeFunction{Name: fn, Async: f.Async})
+			}
+			rp.Modules = append(rp.Modules, rm)
+		}
+		out = append(out, rp)
+	}
+	return out
 }
 
 // phaseForStep 把流水线阶段映射为退出码。

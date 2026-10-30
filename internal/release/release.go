@@ -18,6 +18,7 @@ import (
 
 	"berba/internal/aapt2"
 	"berba/internal/fswalk"
+	"berba/internal/nativeplugin"
 	"berba/internal/payload"
 	"berba/internal/publish"
 )
@@ -102,11 +103,29 @@ func Package(ctx context.Context, opts Options) (*Result, error) {
 		}
 	}
 
-	progress("写入 versions.json")
+	progress("校验原生 shim")
 	shell := payload.ShellVersions{}
 	for _, dex := range layout.Dexes {
 		shell.DexSha256 = append(shell.DexSha256, mustHash(dex))
 	}
+	if layout.Shell != nil {
+		if layout.Shell.NativeABIVersion != nativeplugin.ABIVersion {
+			return nil, fmt.Errorf("shell 的 nativeAbiVersion=%d，期望 %d（请重新构建 shell）", layout.Shell.NativeABIVersion, nativeplugin.ABIVersion)
+		}
+		shell.NativeSha256 = make(map[string]string, len(nativeplugin.SupportedABIs))
+		for _, abi := range nativeplugin.SupportedABIs {
+			shim, ok := layout.Native[abi]
+			if !ok {
+				return nil, fmt.Errorf("发行包缺少 payload/native/%s/%s", abi, payload.NativeShimName)
+			}
+			if err := nativeplugin.ValidateShimELF(shim, abi); err != nil {
+				return nil, err
+			}
+			shell.NativeSha256[abi] = mustHash(shim)
+		}
+	}
+
+	progress("写入 versions.json")
 	versions := payload.VersionsFile{
 		Version: opts.Version,
 		Aapt2: payload.VersionedHash{
@@ -172,10 +191,14 @@ func copyDocs(srcRoot, dstRoot string) error {
 			files = append(files, name)
 		}
 	}
-	docsDir := filepath.Join(srcRoot, "docs")
-	if st, err := os.Stat(docsDir); err == nil && st.IsDir() {
-		if err := fswalk.Files(docsDir, func(relSlash, absPath string) error {
-			files = append(files, filepath.Join("docs", filepath.FromSlash(relSlash)))
+	for _, dir := range []string{"docs", "include"} {
+		src := filepath.Join(srcRoot, dir)
+		st, err := os.Stat(src)
+		if err != nil || !st.IsDir() {
+			continue
+		}
+		if err := fswalk.Files(src, func(relSlash, absPath string) error {
+			files = append(files, filepath.Join(dir, filepath.FromSlash(relSlash)))
 			return nil
 		}); err != nil {
 			return err

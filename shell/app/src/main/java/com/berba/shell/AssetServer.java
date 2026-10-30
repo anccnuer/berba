@@ -27,13 +27,13 @@ final class AssetServer extends WebViewClient {
     private static final String TAG = "berba";
     private static final int MAX_ASSET = 64 * 1024 * 1024;
 
-    private final MainActivity activity;
+    private final UiSession session;
     private final AppConfig config;
     private final byte[] shim;
     private final byte[] shimTag;
 
-    AssetServer(MainActivity activity, AppConfig config, JsBridge bridge) {
-        this.activity = activity;
+    AssetServer(UiSession session, AppConfig config, JsBridge bridge) {
+        this.session = session;
         this.config = config;
         this.shim = bridge.shim().getBytes(StandardCharsets.UTF_8);
         this.shimTag = bridge.shimTag().getBytes(StandardCharsets.US_ASCII);
@@ -111,7 +111,7 @@ final class AssetServer extends WebViewClient {
     }
 
     private byte[] readAsset(String path) {
-        try (InputStream in = activity.getAssets().open(path)) {
+        try (InputStream in = session.activity().getAssets().open(path)) {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             byte[] buf = new byte[8192];
             int total = 0;
@@ -309,6 +309,10 @@ final class AssetServer extends WebViewClient {
     @Override
     public void onPageStarted(WebView view, String url, Bitmap favicon) {
         super.onPageStarted(view, url, favicon);
+        if (!session.isCurrent()) {
+            return;
+        }
+        MainActivity activity = session.activity();
         Uri uri = Uri.parse(url);
         String scheme = uri.getScheme();
         if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) {
@@ -330,6 +334,10 @@ final class AssetServer extends WebViewClient {
     @Override
     public void onPageFinished(WebView view, String url) {
         super.onPageFinished(view, url);
+        if (!session.isCurrent()) {
+            return;
+        }
+        MainActivity activity = session.activity();
         Uri uri = Uri.parse(url);
         if (allowed(uri)) {
             activity.setPageOrigin(originOf(uri));
@@ -342,15 +350,17 @@ final class AssetServer extends WebViewClient {
     @Override
     public void doUpdateVisitedHistory(WebView view, String url, boolean isReload) {
         super.doUpdateVisitedHistory(view, url, isReload);
-        activity.updateCanGoBack(view.canGoBack());
+        if (session.isCurrent()) {
+            session.activity().updateCanGoBack(view.canGoBack());
+        }
     }
 
     @Override
     public void onReceivedHttpError(WebView view, WebResourceRequest request,
                                     WebResourceResponse errorResponse) {
         super.onReceivedHttpError(view, request, errorResponse);
-        if (request.isForMainFrame()) {
-            activity.onWebErrorEvent("页面返回 HTTP " + errorResponse.getStatusCode(),
+        if (session.isCurrent() && request.isForMainFrame()) {
+            session.activity().onWebErrorEvent("页面返回 HTTP " + errorResponse.getStatusCode(),
                     request.getUrl().toString());
         }
     }
@@ -359,16 +369,18 @@ final class AssetServer extends WebViewClient {
     public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
         String reason = detail == null ? "unknown" : "crash=" + detail.didCrash();
         Log.e(TAG, "WebView 渲染进程退出: " + reason);
-        activity.onRendererGone(reason);
+        if (session.isCurrent()) {
+            session.activity().onRendererGone(reason);
+        }
         return true;
     }
 
     @Override
     public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
         super.onReceivedError(view, request, error);
-        if (request.isForMainFrame()) {
+        if (session.isCurrent() && request.isForMainFrame()) {
             CharSequence desc = error.getDescription();
-            activity.onWebErrorEvent(desc == null ? "页面加载失败" : desc.toString(),
+            session.activity().onWebErrorEvent(desc == null ? "页面加载失败" : desc.toString(),
                     request.getUrl().toString());
         }
     }

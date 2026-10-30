@@ -6,8 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"berba/internal/clierr"
+	"berba/internal/nativeplugin"
 	"berba/internal/payload"
 )
 
@@ -43,6 +45,34 @@ func runDoctor(args []string) error {
 	for _, dex := range layout.Dexes {
 		check("shell dex "+filepath.Base(dex), dex)
 	}
+	switch {
+	case layout.Shell == nil:
+		fmt.Fprintf(out, "  ! payload/shell.json 缺失（旧发行包），仅支持 core 能力\n")
+	default:
+		caps := "无"
+		if len(layout.Shell.Capabilities) > 0 {
+			caps = strings.Join(layout.Shell.Capabilities, ", ")
+		}
+		fmt.Fprintf(out, "  能力: %s\n", caps)
+		fmt.Fprintf(out, "  原生插件 ABI: %d\n", layout.Shell.NativeABIVersion)
+		if layout.Shell.NativeABIVersion > 0 {
+			for _, abi := range nativeplugin.SupportedABIs {
+				p := layout.Native[abi]
+				if p == "" {
+					fmt.Fprintf(out, "  ✗ 缺少 %s JNI shim: payload/native/%s/%s\n", abi, abi, payload.NativeShimName)
+					ok = false
+					continue
+				}
+				if !check("native shim "+abi, p) {
+					continue
+				}
+				if err := nativeplugin.ValidateShimELF(p, abi); err != nil {
+					fmt.Fprintf(out, "  ✗ %v\n", err)
+					ok = false
+				}
+			}
+		}
+	}
 
 	if layout.Versions != "" {
 		if vf, err := payload.ReadVersions(layout.Versions); err == nil {
@@ -72,6 +102,26 @@ func runDoctor(args []string) error {
 				for i, dex := range layout.Dexes {
 					if !checkHash("shell dex "+filepath.Base(dex), dex, vf.Shell.DexSha256[i]) {
 						ok = false
+					}
+				}
+			}
+			if layout.Shell != nil && layout.Shell.NativeABIVersion > 0 {
+				switch {
+				case len(vf.Shell.NativeSha256) == 0:
+					fmt.Fprintf(out, "  ✗ versions.json 未记录 shim 哈希\n")
+					ok = false
+				default:
+					for _, abi := range nativeplugin.SupportedABIs {
+						p := layout.Native[abi]
+						want := vf.Shell.NativeSha256[abi]
+						if p == "" || want == "" {
+							fmt.Fprintf(out, "  ✗ versions.json 缺少 %s shim 哈希\n", abi)
+							ok = false
+							continue
+						}
+						if !checkHash("native shim "+abi, p, want) {
+							ok = false
+						}
 					}
 				}
 			}

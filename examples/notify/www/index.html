@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Notify 示例</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Notify 示例</h1>
+      <p>本地通知、通道、权限与点击事件。</p>
+    </header>
+
+    <p class="status" id="status" aria-live="polite">正在读取通知权限…</p>
+
+    <section class="fields">
+      <label>标题 <input id="title" value="berba 通知" maxlength="64"></label>
+      <label>正文 <input id="body" value="点击这条通知查看事件" maxlength="128"></label>
+    </section>
+
+    <section class="actions">
+      <button id="permission">请求通知权限</button>
+      <button id="show">显示通知</button>
+      <button id="showCustom" class="secondary">自定义内容</button>
+      <button id="cancel" class="secondary">取消 demo</button>
+      <button id="cancelAll" class="secondary">全部取消</button>
+    </section>
+
+    <pre id="out" aria-live="polite">等待操作…</pre>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

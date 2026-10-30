@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "capabilities": [
+    "native",
+    "notify",
+    "task"
+  ],
+  "nativeAbiVersion": 1
+}

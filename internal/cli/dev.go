@@ -8,12 +8,77 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 
+	"berba/internal/capability"
 	"berba/internal/clierr"
 	"berba/internal/config"
 	"berba/internal/devserver"
+	"berba/internal/nativeplugin"
 )
+
+// devLuaMeta 为浏览器 Lua 运行时准备能力、模块、事件与原生插件元数据。
+func devLuaMeta(proj *config.Project) ([]string, map[string][]string, map[string][]string, *devserver.LuaNative, error) {
+	reg, err := capability.LoadBuiltin()
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	resolved, err := reg.Resolve(capability.Request{Capabilities: proj.Capabilities})
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+
+	modules := make(map[string][]string, len(resolved.Modules))
+	for _, m := range resolved.Modules {
+		fns := make([]string, 0, len(m.Functions))
+		for _, fn := range m.Functions {
+			fns = append(fns, fn.Name)
+		}
+		sort.Strings(fns)
+		modules[m.Name] = fns
+	}
+
+	events := map[string][]string{}
+	for _, e := range resolved.Events {
+		events[e.Owner] = append(events[e.Owner], e.Name)
+	}
+	for owner := range events {
+		sort.Strings(events[owner])
+	}
+
+	native := &devserver.LuaNative{ABIVersion: nativeplugin.ABIVersion}
+	if resolved.Has("native") {
+		for _, cfg := range proj.NativePlugins {
+			spec, err := nativeplugin.LoadSpec(filepath.Join(cfg.Dir, "spec.json"))
+			if err != nil {
+				return nil, nil, nil, nil, fmt.Errorf("插件 %q: %w", cfg.Name, err)
+			}
+			if spec.Name != cfg.Name {
+				return nil, nil, nil, nil, fmt.Errorf("插件 %q 的 spec.json name=%q 不一致", cfg.Name, spec.Name)
+			}
+			plugin := devserver.LuaNativePlugin{
+				Name:    spec.Name,
+				LibName: "libberba_" + spec.Name + ".so",
+				Modules: make(map[string]devserver.LuaNativeModule, len(spec.Modules)),
+			}
+			for modName, mod := range spec.Modules {
+				fns := make(map[string]devserver.LuaNativeFunction, len(mod.Functions))
+				for fnName, fn := range mod.Functions {
+					fns[fnName] = devserver.LuaNativeFunction{Async: fn.Async}
+				}
+				plugin.Modules[modName] = devserver.LuaNativeModule{Functions: fns}
+			}
+			native.Plugins = append(native.Plugins, plugin)
+		}
+		sort.Slice(native.Plugins, func(i, j int) bool {
+			return native.Plugins[i].Name < native.Plugins[j].Name
+		})
+	}
+	caps := make([]string, len(resolved.Capabilities))
+	copy(caps, resolved.Capabilities)
+	return caps, modules, events, native, nil
+}
 
 func runDev(args []string) error {
 	fsFlags := newFlagSet("dev", "启动本地静态服务器（注入桥 mock）")
@@ -54,11 +119,19 @@ func runDev(args []string) error {
 
 	luaRoot := ""
 	luaEntry := ""
+	var luaCaps []string
+	var luaModules, luaEvents map[string][]string
+	var luaNative *devserver.LuaNative
 	if proj.HasLua {
 		luaRoot = proj.LuaDir
 		luaEntry = strings.TrimSpace(proj.Config.Lua.Entry)
 		if luaEntry == "" {
 			luaEntry = "main.lua"
+		}
+		var err error
+		luaCaps, luaModules, luaEvents, luaNative, err = devLuaMeta(proj)
+		if err != nil {
+			return clierr.New(clierr.CodeConfig, "", err)
 		}
 	}
 
@@ -77,6 +150,10 @@ func runDev(args []string) error {
 			VersionName: proj.Config.VersionName,
 			VersionCode: proj.Config.VersionCode,
 		},
+		LuaCapabilities: luaCaps,
+		LuaModules:      luaModules,
+		LuaEvents:       luaEvents,
+		LuaNative:       luaNative,
 	})
 	if err != nil {
 		return err
@@ -92,6 +169,9 @@ func runDev(args []string) error {
 	fmt.Fprintf(out, "开发服务器: %s\n", url)
 	if luaRoot != "" {
 		fmt.Fprintf(out, "Lua 运行时: 浏览器内执行 %s（fengari）\n", luaEntry)
+		if len(luaCaps) > 0 {
+			fmt.Fprintf(out, "启用能力:   %s\n", strings.Join(luaCaps, ", "))
+		}
 	}
 	switch {
 	case mock != "" && luaRoot != "":

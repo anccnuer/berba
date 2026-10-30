@@ -12,6 +12,7 @@
   "orientation": "portrait",
   "theme": "light",
   "cleartext": false,
+  "capabilities": ["notify"],
   "permissions": ["CAMERA", "ACCESS_FINE_LOCATION"],
   "metaData": { "com.example.channel": "internal" },
   "deepLinks": ["myapp://open"],
@@ -39,6 +40,7 @@
 | `orientation` | string | `auto` | `auto` / `portrait` / `landscape` |
 | `theme` | string | `light` | `light` / `dark` / `device`，映射到 Android 框架主题 |
 | `cleartext` | bool | `false` | 是否允许明文 HTTP（不推荐） |
+| `capabilities` | string[] | `[]` | 显式启用的能力，当前支持 `notify`、`task`、`native`；`core` 始终启用，最多 32 个 |
 | `permissions` | string[] | `[]` | 权限别名或完整 `android.permission.X`；`INTERNET` 会自动追加 |
 | `metaData` | object | `{}` | 写入 `<application>` 的 `<meta-data>`，键值均为字符串 |
 | `deepLinks` | string[] | `[]` | 自定义 scheme 深链，如 `"myapp://open"`；生成 VIEW intent-filter 并启用 `launchMode="singleTask"` |
@@ -104,6 +106,52 @@
 
 运行时申请权限请使用 Lua 的 `permission.request`，见 [lua-api.md](lua-api.md)。
 
+## 能力
+
+`capabilities` 按需启用超出核心 API 的系统能力：
+
+```json
+{ "capabilities": ["notify"] }
+```
+
+| 能力 | 说明 |
+| --- | --- |
+| `notify` | 本地通知：自动加入 `POST_NOTIFICATIONS`、生成 `drawable-*/ic_stat_berba.png` 小图标，并让 Activity 使用 `launchMode="singleTask"` |
+| `task` | 后台定时任务：自动加入 `RECEIVE_BOOT_COMPLETED`、`SCHEDULE_EXACT_ALARM`，注册 `TaskJobService`、`TaskAlarmReceiver`、`TaskBootReceiver`；需要 `lua` 目录 |
+| `native` | 原生插件：加载 `native.plugins` 声明的 C ABI 共享库，设置 `extractNativeLibs="true"`；需要 `lua` 目录 |
+
+能力名必须匹配 `^[a-z][a-z0-9_]{0,31}$`，重复项自动去重；`core` 无需也无法写入。未实现的能力名会导致构建失败。能力会自动合并 Manifest 权限、组件与资源，无需在 `permissions` 中重复声明这些权限。完整 API 见 [lua-api.md](lua-api.md#notify) 与自动生成的 [capabilities.md](capabilities.md)。`notify`、`task` 与 `native` 都要求 Lua 运行时。
+
+## 原生插件
+
+启用 `native` 能力后，可在 `native.plugins` 中声明 C/C++/Rust 插件：
+
+```json
+{
+  "capabilities": ["native"],
+  "native": {
+    "plugins": [
+      {
+        "name": "echo",
+        "dir": "native/echo",
+        "config": { "greeting": "hi" }
+      }
+    ]
+  }
+}
+```
+
+| 字段 | 类型 | 默认 | 说明 |
+| --- | --- | --- | --- |
+| `name` | string | 必填 | `^[a-z][a-z0-9_]{0,31}$`，不能为 `jni`；库名为 `libberba_<name>.so` |
+| `dir` | string | `native/<name>` | 插件目录，必须在项目内；符号链接逃逸会被拒绝 |
+| `config` | object | `{}` | 传给 `berba_plugin_init` 的内联 JSON，上限 64KB；会进入 APK，**不要放密钥** |
+
+- 声明 `native.plugins` 时必须同时启用 `native` 能力；启用 `native` 但没有插件只会告警。
+- 每个插件目录需要 `spec.json` 与 `lib/<abi>/libberba_<name>.so`；支持 `arm64-v8a`、`armeabi-v7a`、`x86_64`，APK 取所有插件的 ABI 交集。
+- C++ 插件必须静态链接 STL；`DT_NEEDED` 仅允许 `libc.so`、`libm.so`、`libdl.so`、`liblog.so`。
+- 完整 ABI、构建与示例见 [native-plugins.md](native-plugins.md)。
+
 ## 深链
 
 `deepLinks` 声明自定义 scheme，供其他应用或浏览器唤起本应用：
@@ -114,7 +162,7 @@
 
 - 每条链接解析出 `scheme` 与 `host`，按 `scheme+host` 生成 `<intent-filter>`（VIEW + DEFAULT + BROWSABLE）；`host` 为空时匹配该 scheme 的全部链接。
 - scheme 必须以小写字母开头（仅小写字母、数字、`+ . -`），禁止 `http/https/file/content/data`；重复条目自动去重，最多 16 条。
-- 声明深链后 Activity 自动使用 `launchMode="singleTask"`，保证第二次唤起走 `onNewIntent`。
+- 声明深链后 Activity 自动使用 `launchMode="singleTask"`，保证第二次唤起走 `onNewIntent`（启用 `notify` 能力同样会开启该模式）。
 - Lua 侧通过 `app.on("newIntent", fn)` 收到完整 URL 字符串（冷启动时会在 `create` 之后补发）。深链内容不可信，务必校验后再使用。
 
 ## 启动页面与 origin

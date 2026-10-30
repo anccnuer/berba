@@ -13,10 +13,10 @@ import android.webkit.WebView;
 final class BridgeChromeClient extends WebChromeClient {
     private static final String TAG = "berba";
 
-    private final MainActivity activity;
+    private final UiSession session;
 
-    BridgeChromeClient(MainActivity activity) {
-        this.activity = activity;
+    BridgeChromeClient(UiSession session) {
+        this.session = session;
     }
 
     @Override
@@ -30,31 +30,43 @@ final class BridgeChromeClient extends WebChromeClient {
 
     @Override
     public boolean onJsAlert(WebView view, String url, String message, JsResult result) {
-        activity.showJsAlert(message, result);
+        if (!session.isCurrent()) {
+            result.cancel();
+            return true;
+        }
+        session.activity().showJsAlert(message, result);
         return true;
     }
 
     @Override
     public boolean onJsConfirm(WebView view, String url, String message, JsResult result) {
-        activity.showJsConfirm(message, result);
+        if (!session.isCurrent()) {
+            result.cancel();
+            return true;
+        }
+        session.activity().showJsConfirm(message, result);
         return true;
     }
 
     @Override
     public boolean onJsPrompt(WebView view, String url, String message, String defaultValue,
                               JsPromptResult result) {
-        activity.showJsPrompt(message, defaultValue, result);
+        if (!session.isCurrent()) {
+            result.cancel();
+            return true;
+        }
+        session.activity().showJsPrompt(message, defaultValue, result);
         return true;
     }
 
     @Override
     public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback,
                                      FileChooserParams params) {
-        if (params == null) {
+        if (params == null || !session.isCurrent()) {
             callback.onReceiveValue(null);
             return true;
         }
-        activity.openFileChooser(callback, params.createIntent());
+        session.activity().openFileChooser(callback, params.createIntent());
         return true;
     }
 }

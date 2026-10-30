@@ -209,6 +209,98 @@ func TestLuaManifestListsSources(t *testing.T) {
 		payload.App.VersionName != "1.2.3" || payload.App.VersionCode != 7 {
 		t.Fatalf("app meta = %+v", payload.App)
 	}
+	var meta struct {
+		Capabilities *[]string            `json:"capabilities"`
+		Modules      *map[string][]string `json:"modules"`
+		Events       *map[string][]string `json:"events"`
+		Native       *LuaNative           `json:"native"`
+	}
+	if err := json.Unmarshal([]byte(body), &meta); err != nil {
+		t.Fatalf("bad json: %v", err)
+	}
+	if meta.Capabilities != nil || meta.Modules != nil || meta.Events != nil || meta.Native != nil {
+		t.Fatalf("未配置能力元数据时不应出现字段: %+v", meta)
+	}
+}
+
+func TestLuaManifestCarriesCapabilities(t *testing.T) {
+	web := writeTree(t, map[string]string{"index.html": "ok"})
+	luaRoot := writeTree(t, map[string]string{"main.lua": "return true"})
+	s, err := New(Options{
+		Root:     web,
+		LuaRoot:  luaRoot,
+		LuaEntry: "main.lua",
+		LuaCapabilities: []string{
+			"native", "notify",
+		},
+		LuaModules: map[string][]string{
+			"app":    {"info", "on"},
+			"notify": {"cancel", "show"},
+		},
+		LuaEvents: map[string][]string{
+			"app": {"create", "notification"},
+		},
+		LuaNative: &LuaNative{
+			ABIVersion: 1,
+			Plugins: []LuaNativePlugin{{
+				Name:    "echo",
+				LibName: "libberba_echo.so",
+				Modules: map[string]LuaNativeModule{
+					"echo": {Functions: map[string]LuaNativeFunction{
+						"call":  {Async: false},
+						"later": {Async: true},
+					}},
+				},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, body := get(t, s.Handler(), "/__berba/lua.json")
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d body=%s", res.StatusCode, body)
+	}
+	var meta struct {
+		Capabilities []string            `json:"capabilities"`
+		Modules      map[string][]string `json:"modules"`
+		Events       map[string][]string `json:"events"`
+		Native       struct {
+			ABIVersion int `json:"abiVersion"`
+			Plugins    []struct {
+				Name    string `json:"name"`
+				LibName string `json:"libName"`
+				Modules map[string]struct {
+					Functions map[string]struct {
+						Async bool `json:"async"`
+					} `json:"functions"`
+				} `json:"modules"`
+			} `json:"plugins"`
+		} `json:"native"`
+	}
+	if err := json.Unmarshal([]byte(body), &meta); err != nil {
+		t.Fatalf("bad json: %v", err)
+	}
+	if strings.Join(meta.Capabilities, ",") != "native,notify" {
+		t.Fatalf("capabilities = %v", meta.Capabilities)
+	}
+	if strings.Join(meta.Modules["notify"], ",") != "cancel,show" {
+		t.Fatalf("notify functions = %v", meta.Modules["notify"])
+	}
+	if strings.Join(meta.Events["app"], ",") != "create,notification" {
+		t.Fatalf("app events = %v", meta.Events["app"])
+	}
+	if meta.Native.ABIVersion != 1 || len(meta.Native.Plugins) != 1 {
+		t.Fatalf("native = %+v", meta.Native)
+	}
+	plugin := meta.Native.Plugins[0]
+	if plugin.Name != "echo" || plugin.LibName != "libberba_echo.so" {
+		t.Fatalf("plugin = %+v", plugin)
+	}
+	if !plugin.Modules["echo"].Functions["later"].Async ||
+		plugin.Modules["echo"].Functions["call"].Async {
+		t.Fatalf("functions = %+v", plugin.Modules["echo"].Functions)
+	}
 }
 
 func TestLuaAssetsServed(t *testing.T) {

@@ -226,3 +226,104 @@ func TestDeepLinksInvalid(t *testing.T) {
 		}
 	}
 }
+
+func TestCapabilitiesNormalized(t *testing.T) {
+	body := `{"name":"n","package":"com.example.x","versionName":"1.0.0",
+	  "capabilities":["task","notify"," task "]}`
+	root := writeProject(t, body, map[string]string{"www/index.html": "x", "lua/main.lua": "x"})
+	p, err := Load(filepath.Join(root, "app.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"notify", "task"}
+	if len(p.Capabilities) != len(want) {
+		t.Fatalf("capabilities = %v", p.Capabilities)
+	}
+	for i := range want {
+		if p.Capabilities[i] != want[i] || p.Config.Capabilities[i] != want[i] {
+			t.Fatalf("capabilities = %v", p.Capabilities)
+		}
+	}
+}
+
+func TestCapabilitiesInvalid(t *testing.T) {
+	for _, caps := range []string{`[""]`, `["Notify"]`, `["core"]`, `["bad-name"]`} {
+		body := fmt.Sprintf(`{"name":"n","package":"com.example.x","versionName":"1.0.0","capabilities":%s}`, caps)
+		root := writeProject(t, body, map[string]string{"www/index.html": "x"})
+		if _, err := Load(filepath.Join(root, "app.json")); err == nil {
+			t.Fatalf("expected error for %s", caps)
+		}
+	}
+}
+
+func TestNativePlugins(t *testing.T) {
+	body := `{"name":"n","package":"com.example.x","versionName":"1.0.0",
+	  "capabilities":["native"],
+	  "native":{"plugins":[{"name":"echo","config":{"greeting":"hi"}}]}}`
+	root := writeProject(t, body, map[string]string{"www/index.html": "x", "lua/main.lua": "x", "native/echo/spec.json": "{}"})
+	p, err := Load(filepath.Join(root, "app.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.NativePlugins) != 1 {
+		t.Fatalf("plugins = %+v", p.NativePlugins)
+	}
+	plugin := p.NativePlugins[0]
+	if plugin.Name != "echo" || !filepath.IsAbs(plugin.Dir) || filepath.Base(plugin.Dir) != "echo" {
+		t.Fatalf("plugin = %+v", plugin)
+	}
+	if len(p.Warnings) != 0 {
+		t.Fatalf("warnings = %v", p.Warnings)
+	}
+}
+
+func TestNativePluginsRequireCapability(t *testing.T) {
+	body := `{"name":"n","package":"com.example.x","versionName":"1.0.0",
+	  "native":{"plugins":[{"name":"echo"}]}}`
+	root := writeProject(t, body, map[string]string{"www/index.html": "x", "native/echo/spec.json": "{}"})
+	if _, err := Load(filepath.Join(root, "app.json")); err == nil {
+		t.Fatal("expected native capability requirement")
+	}
+}
+
+func TestNativeWithoutPluginsWarns(t *testing.T) {
+	body := `{"name":"n","package":"com.example.x","versionName":"1.0.0","capabilities":["native"]}`
+	root := writeProject(t, body, map[string]string{"www/index.html": "x", "lua/main.lua": "x"})
+	p, err := Load(filepath.Join(root, "app.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Warnings) != 1 || !strings.Contains(p.Warnings[0], "native.plugins") {
+		t.Fatalf("warnings = %v", p.Warnings)
+	}
+}
+
+func TestNativePluginValidation(t *testing.T) {
+	cases := map[string]string{
+		"bad name": `{"name":"n","package":"com.example.x","versionName":"1.0.0","capabilities":["native"],
+		  "native":{"plugins":[{"name":"Echo"}]}}`,
+		"reserved": `{"name":"n","package":"com.example.x","versionName":"1.0.0","capabilities":["native"],
+		  "native":{"plugins":[{"name":"jni"}]}}`,
+		"escape": `{"name":"n","package":"com.example.x","versionName":"1.0.0","capabilities":["native"],
+		  "native":{"plugins":[{"name":"echo","dir":"../outside"}]}}`,
+		"missing dir": `{"name":"n","package":"com.example.x","versionName":"1.0.0","capabilities":["native"],
+		  "native":{"plugins":[{"name":"echo","dir":"native/missing"}]}}`,
+		"bad config": `{"name":"n","package":"com.example.x","versionName":"1.0.0","capabilities":["native"],
+		  "native":{"plugins":[{"name":"echo","config":"not json"}]}}`,
+	}
+	for name, body := range cases {
+		root := writeProject(t, body, map[string]string{"www/index.html": "x", "native/echo/spec.json": "{}"})
+		if _, err := Load(filepath.Join(root, "app.json")); err == nil {
+			t.Fatalf("%s: expected error", name)
+		}
+	}
+}
+
+func TestNativePluginDuplicate(t *testing.T) {
+	body := `{"name":"n","package":"com.example.x","versionName":"1.0.0","capabilities":["native"],
+	  "native":{"plugins":[{"name":"echo"},{"name":"echo"}]}}`
+	root := writeProject(t, body, map[string]string{"www/index.html": "x", "native/echo/spec.json": "{}"})
+	if _, err := Load(filepath.Join(root, "app.json")); err == nil {
+		t.Fatal("expected duplicate plugin error")
+	}
+}

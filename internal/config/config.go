@@ -21,6 +21,7 @@ const (
 
 var packageRE = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_]*(\.[a-zA-Z][a-zA-Z0-9_]*)+$`)
 var deepLinkSchemeRE = regexp.MustCompile(`^[a-z][a-z0-9+.\-]{1,31}$`)
+var capabilityNameRE = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
 
 // DeepLink 是一条自定义 scheme 深链（Manifest intent-filter 用 scheme+host 匹配）。
 type DeepLink struct {
@@ -94,22 +95,35 @@ type HTTPConfig struct {
 	AllowPrivateNetwork bool `json:"allowPrivateNetwork"`
 }
 
+// NativePlugin 声明一个原生插件目录；config 为内联 JSON，构建期规范化后写入 APK。
+type NativePlugin struct {
+	Name   string          `json:"name"`
+	Dir    string          `json:"dir"`
+	Config json.RawMessage `json:"config"`
+}
+
+type NativeConfig struct {
+	Plugins []NativePlugin `json:"plugins"`
+}
+
 type Config struct {
-	Name        string            `json:"name"`
-	Package     string            `json:"package"`
-	VersionName string            `json:"versionName"`
-	VersionCode int               `json:"versionCode"`
-	Icon        string            `json:"icon"`
-	Orientation string            `json:"orientation"`
-	Theme       string            `json:"theme"`
-	Cleartext   bool              `json:"cleartext"`
-	Permissions []string          `json:"permissions"`
-	DeepLinks   []string          `json:"deepLinks"`
-	MetaData    map[string]string `json:"metaData"`
-	Web         WebConfig         `json:"web"`
-	Lua         LuaConfig         `json:"lua"`
-	HTTP        HTTPConfig        `json:"http"`
-	Debug       bool              `json:"debug"`
+	Name         string            `json:"name"`
+	Package      string            `json:"package"`
+	VersionName  string            `json:"versionName"`
+	VersionCode  int               `json:"versionCode"`
+	Icon         string            `json:"icon"`
+	Orientation  string            `json:"orientation"`
+	Theme        string            `json:"theme"`
+	Cleartext    bool              `json:"cleartext"`
+	Permissions  []string          `json:"permissions"`
+	DeepLinks    []string          `json:"deepLinks"`
+	Capabilities []string          `json:"capabilities"`
+	Native       NativeConfig      `json:"native"`
+	MetaData     map[string]string `json:"metaData"`
+	Web          WebConfig         `json:"web"`
+	Lua          LuaConfig         `json:"lua"`
+	HTTP         HTTPConfig        `json:"http"`
+	Debug        bool              `json:"debug"`
 }
 
 type Project struct {
@@ -118,6 +132,8 @@ type Project struct {
 	Config         Config
 	Permissions    []string
 	DeepLinks      []DeepLink
+	Capabilities   []string
+	NativePlugins  []NativePlugin
 	IconPath       string
 	WebDir         string
 	LuaDir         string
@@ -343,6 +359,126 @@ func (p *Project) finish() error {
 		if strings.TrimSpace(name) == "" {
 			return fmt.Errorf("metaData 的 key 不能为空")
 		}
+	}
+
+	caps, err := normalizeCapabilities(cfg.Capabilities)
+	if err != nil {
+		return err
+	}
+	cfg.Capabilities = caps
+	p.Capabilities = caps
+
+	if err := p.finishNative(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func normalizeCapabilities(raw []string) ([]string, error) {
+	if len(raw) > 32 {
+		return nil, fmt.Errorf("capabilities 最多 32 个")
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(raw))
+	for _, item := range raw {
+		name := strings.TrimSpace(item)
+		if name == "" {
+			return nil, fmt.Errorf("capabilities 不能包含空字符串")
+		}
+		if !capabilityNameRE.MatchString(name) {
+			return nil, fmt.Errorf("能力名不合法: %q（需匹配 ^[a-z][a-z0-9_]{0,31}$）", name)
+		}
+		if name == "core" {
+			return nil, fmt.Errorf("core 能力始终启用，无需写入 capabilities")
+		}
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+func (p *Project) finishNative() error {
+	plugins := p.Config.Native.Plugins
+	if len(plugins) > 16 {
+		return fmt.Errorf("native.plugins 最多 16 个")
+	}
+	seen := map[string]bool{}
+	resolved := make([]NativePlugin, 0, len(plugins))
+	for i := range plugins {
+		plugin := plugins[i]
+		plugin.Name = strings.TrimSpace(plugin.Name)
+		if !capabilityNameRE.MatchString(plugin.Name) {
+			return fmt.Errorf("native.plugins[%d].name 不合法: %q", i, plugin.Name)
+		}
+		if plugin.Name == "jni" {
+			return fmt.Errorf("native.plugins 名称 jni 为保留名")
+		}
+		if seen[plugin.Name] {
+			return fmt.Errorf("native.plugins 名称重复: %q", plugin.Name)
+		}
+		seen[plugin.Name] = true
+
+		dir := strings.TrimSpace(plugin.Dir)
+		if dir == "" {
+			dir = "native/" + plugin.Name
+		}
+		full, err := resolveWithin(p.Root, dir, "native.plugins["+plugin.Name+"].dir")
+		if err != nil {
+			return err
+		}
+		info, err := os.Stat(full)
+		if err != nil || !info.IsDir() {
+			return fmt.Errorf("native.plugins[%q].dir 不存在或不是目录: %s", plugin.Name, full)
+		}
+		if err := ensureNoSymlinkEscape(p.Root, full); err != nil {
+			return fmt.Errorf("native.plugins[%q].dir 不安全: %w", plugin.Name, err)
+		}
+		plugin.Dir = full
+
+		if len(plugin.Config) > 64*1024 {
+			return fmt.Errorf("native.plugins[%q].config 超过 64KB", plugin.Name)
+		}
+		if len(plugin.Config) > 0 {
+			trimmed := bytes.TrimSpace(plugin.Config)
+			if len(trimmed) == 0 || trimmed[0] != '{' || !json.Valid(trimmed) {
+				return fmt.Errorf("native.plugins[%q].config 必须是合法的 JSON 对象", plugin.Name)
+			}
+		}
+		resolved = append(resolved, plugin)
+	}
+
+	hasNative := false
+	for _, name := range p.Capabilities {
+		if name == "native" {
+			hasNative = true
+		}
+	}
+	switch {
+	case len(resolved) > 0 && !hasNative:
+		return fmt.Errorf("声明 native.plugins 时必须在 capabilities 中包含 \"native\"")
+	case hasNative && len(resolved) == 0:
+		p.Warnings = append(p.Warnings, "capabilities 含 native 但 native.plugins 为空，APK 不会包含原生插件")
+	}
+	p.Config.Native.Plugins = resolved
+	p.NativePlugins = resolved
+	return nil
+}
+
+func ensureNoSymlinkEscape(root, dir string) error {
+	rootReal, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		rootReal = root
+	}
+	dirReal, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return err
+	}
+	if !within(rootReal, dirReal) {
+		return fmt.Errorf("目录经符号链接指向项目外")
 	}
 	return nil
 }

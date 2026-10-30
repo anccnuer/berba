@@ -6,6 +6,7 @@
   "orientation": "auto",
   "theme": "light",
   "cleartext": false,
+  "capabilities": [],
   "permissions": [],
   "web": {
     "dir": "www",

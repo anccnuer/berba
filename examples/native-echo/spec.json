@@ -1,0 +1,13 @@
+{
+  "name": "echo",
+  "abiVersion": 1,
+  "version": "1.0.0",
+  "modules": {
+    "echo": {
+      "functions": {
+        "greet": {"async": false},
+        "greet_later": {"async": true}
+      }
+    }
+  }
+}

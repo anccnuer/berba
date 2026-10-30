@@ -35,7 +35,7 @@ AGENTS.md         本文件
 
 - 只通过 `app.json`、`www/`、`lua/`、图标文件表达应用行为。
 - `dev/` 只用于本地调试，可自由创建 `dev/mock.js`；该目录不会打包进 APK。
-- 不存在可编辑的 Android 工程、Manifest、Gradle 或原生代码；不要尝试生成这些文件。
+- 不存在可编辑的 Android 工程、Manifest 或 Gradle；唯一例外是原生插件：确需 C/C++/Rust 时按上游 [`docs/native-plugins.md`](https://github.com/anccnuer/berba/blob/main/docs/native-plugins.md) 在 `native/` 下提供 C ABI 共享库，不要生成 Android 工程。
 - 不要提交 `.berba/` 与 `dist/`（脚手架已自带 `.gitignore`）。
 
 ## 3. 能力边界
@@ -48,15 +48,18 @@ AGENTS.md         本文件
 - JS ↔ Lua 双向调用：`window.berba.call` / `bridge.register`，`bridge.emit` / `window.berba.on`。
 - `berba dev` 浏览器内调试：同一套页面与 Lua（含 `require`）直接运行，桥与事件可用；设备专属能力可在 `dev/mock.js` 伪造。
 - 运行时权限申请；Toast/对话框；沉浸式全屏；屏幕常亮；运行时切换屏幕方向；状态栏颜色；读写剪贴板；震动；系统分享；外部浏览器打开 http(s) 链接。
+- 本地通知（`capabilities: ["notify"]`）：通道、显示/取消、点击事件；系统通知权限仍需运行时申请。
+- 后台定时任务（`capabilities: ["task"]`）：一次性/周期/每日任务，闹钟 + JobScheduler 触发 `app.on("task")`，重启与改时间后自动重排；无前台界面时仍可运行（best-effort）。
+- 原生插件（`capabilities: ["native"]` + `native.plugins`）：C ABI v1 共享库暴露 `native.<module>.<function>`，支持同步与跨线程异步；构建期校验 ELF 架构/16KB 对齐/导出符号/依赖白名单。库要先用 NDK 编译到 `<dir>/lib/<abi>/libberba_<name>.so`，多个插件取 ABI 交集，交集为空即构建失败。插件是受信任代码，绕过 Lua 沙箱；C++ 需静态链接 STL（ABI 细节见上游 [`docs/native-plugins.md`](https://github.com/anccnuer/berba/blob/main/docs/native-plugins.md)，用法见 6.15）。
 - 私有文件读写/追加/重命名/删除/stat，键值存储（含 `store.keys`）；读取设备信息。
-- 配置应用名、包名、版本、图标、主题（light/dark/device）、屏幕方向、cleartext、meta-data。
+- 配置应用名、包名、版本、图标、主题（light/dark/device）、屏幕方向、cleartext、meta-data、能力（`capabilities`）。
 
 ### 3.2 不能做（不要尝试，也不要向用户承诺）
 
-- **没有任意 Java/Android API**：Lua 无 `luajava`，不能反射、不能调用未封装的系统能力；不支持原生插件、`.so`、JNI。
+- **没有任意 Java/Android API**：Lua 无 `luajava`，不能反射、不能调用未封装的系统能力；原生能力只能通过 `native` 能力的 C ABI 显式暴露，不能从 Lua 直接加载 `.so` 或调用 JNI。
 - **Lua 库受限**：只有 `base`、`table`、`string`、`math`、`coroutine`、`bit32`；没有 `io`、`os`、`package`、`debug`、`utf8`、`load`、`dofile`、`loadfile`。设备是 Lua 5.2 语义：没有 `//`、位运算运算符、`utf8` 库。**dev 的 fengari 是 Lua 5.3，会接受这些写法；请始终以设备 5.2 为准。**
-- **无后台能力**：没有 Service、推送、定时唤醒、开机自启、通知发送。
-- **系统集成有限**：`<input type="file">` 走系统文件选择器（SAF），下载/`device.share`/`device.openUrl` 交由系统处理；无自定义 Provider、无通知、无后台服务。新窗口/`target="_blank"`、`window.open` 仍被禁用（多窗口已关闭）。
+- **后台能力仅限 `task` 能力**：没有前台服务、推送/FCM、常驻进程或自定义 Service/Receiver/开机脚本；`task` 基于一次性闹钟 + JobScheduler，`am force-stop` 后闹钟被清除，Doze/OEM 策略下为 best-effort。通知只能由 Lua 在进程存活时主动显示（或由 `task` 回调触发），进程被系统回收后不会自行补发。
+- **系统集成有限**：`<input type="file">` 走系统文件选择器（SAF），下载/`device.share`/`device.openUrl` 交由系统处理；无自定义 Provider、无前台服务。新窗口/`target="_blank"`、`window.open` 仍被禁用（多窗口已关闭）。
 - **网页媒体/定位不可用**：壳未实现 `getUserMedia`（相机/麦克风）与 `navigator.geolocation` 授权，二者不可依赖。`permission.request` 只授予 Manifest 权限，不等于网页 API 可用。剪贴板读写使用 `device.clipboard()` / `device.clipboard(text)`。
 - **网页对话框可用但会阻塞页面**：`alert`/`confirm`/`prompt` 映射为原生对话框；`console.*` 写入 Logcat（`adb logcat -s berba`，前缀 `[js]`）。交互复杂时优先用 `ui.*` 或 DOM 弹层。
 - **无多 Activity、无自定义 Manifest/资源/主题**：主题只能是 `light`/`dark`/`device` 映射的框架主题。
@@ -64,7 +67,7 @@ AGENTS.md         本文件
 - **明文网络默认禁止**：只有 `"cleartext": true` 才允许 `http://`；混合内容永远禁止。
 - **远程页面受限**：启动页自身的 origin 会自动加入白名单；页面访问其他远程 origin 时必须写入 `web.allowedOrigins`，否则导航与 JS 桥都会被拒绝。只有白名单页面能使用桥。
 - **不要硬编码密钥/令牌**：`www/` 与 `lua/` 会原样进入 APK，可被解包读取。
-- **dev 不等于设备**：浏览器运行时是 Lua 5.3、权限一律视为已授予、`store`/`file` 落在 `localStorage`、`http` 受 CORS 限制。不要在 dev 通过后跳过 `berba build` 上机验证（差异见 6.12）。
+- **dev 不等于设备**：浏览器运行时是 Lua 5.3、除通知外的权限视为已授予、`notify` 基于 Web Notifications、`task` 不能真正后台调度、`native` 仅在设备可用、`store`/`file` 落在 `localStorage`、`http` 受 CORS 限制。不要在 dev 通过后跳过 `berba build` 上机验证（差异见 6.14）。
 
 ## 4. app.json
 
@@ -78,6 +81,7 @@ AGENTS.md         本文件
   "orientation": "auto",
   "theme": "light",
   "cleartext": false,
+  "capabilities": ["notify", "task"],
   "permissions": ["CAMERA"],
   "metaData": { "com.example.channel": "internal" },
   "web": {
@@ -103,6 +107,8 @@ AGENTS.md         本文件
 | `theme` | `light` / `dark` / `device` |
 | `cleartext` | 是否允许明文 HTTP，默认 `false` |
 | `http.allowPrivateNetwork` | 允许 Lua `http` 访问本机/局域网，默认 `false` |
+| `capabilities` | 显式启用的能力，当前支持 `notify`、`task`、`native`；`core` 始终启用 |
+| `native.plugins` | 原生插件数组 `{ name, dir, config }`；`dir` 默认 `native/<name>` 且必须在项目目录内，库固定为 `<dir>/lib/<abi>/libberba_<name>.so`，`name` 需与插件 `spec.json` 一致 |
 | `permissions` | 权限别名或完整 `android.permission.X`；`INTERNET` 自动追加 |
 | `metaData` | `<application>` 下的 meta-data，键值均为字符串 |
 | `deepLinks` | 自定义 scheme 深链（如 `"myapp://open"`），生成 VIEW intent-filter；声明后 Activity 使用 `launchMode="singleTask"` |
@@ -140,23 +146,29 @@ window.berba.off('tick', onTick);
 
 ## 6. Lua API
 
-全局白名单：`app`、`web`、`bridge`、`http`、`file`、`store`、`permission`、`ui`、`device`、`json`、`log`、`require`。设备上所有回调在单一 Lua 工作线程执行（dev 浏览器为事件循环）；`ui`/`web`/`app.exit`/`device.orientation` 内部自动切主线程。
+全局白名单：`app`、`web`、`bridge`、`http`、`file`、`store`、`permission`、`notify`（需能力）、`task`（需能力）、`native`（需能力）、`ui`、`device`、`json`、`log`、`require`。设备上所有回调在单一 Lua 工作线程执行（dev 浏览器为事件循环）；`ui`/`web`/`app.exit`/`device.orientation` 内部自动切主线程。
+
+运行时是进程级单例：入口每个进程只执行一次，Activity 旋转/重建不会重跑。没有前台界面时，`ui`/`web`/`app.exit`/`device.clipboard`/`device.share`/`device.openUrl`/`device.orientation`/`permission.request` 会报“当前没有前台界面”；`file`/`store`/`http`/`permission.check`/`notify.*`/`task.*` 仍可用。Activity 销毁不会取消在途 HTTP。
 
 ### 6.1 入口与 require
 
-入口文件启动时执行一次。`require("a.b")` 依次查找 `assets/lua/a/b.lua`、`assets/lua/a/b/init.lua`，只执行一次并缓存返回值（无返回值时为 `true`）；循环 require 返回 `true`。只能加载 `lua/` 目录内文件。
+入口文件每个进程启动时执行一次。`require("a.b")` 依次查找 `assets/lua/a/b.lua`、`assets/lua/a/b/init.lua`，只执行一次并缓存返回值（无返回值时为 `true`）；循环 require 返回 `true`。只能加载 `lua/` 目录内文件。
 
 ### 6.2 app
 
 | API | 说明 |
 | --- | --- |
-| `app.on(event, fn)` | `create` / `pause` / `resume` / `destroy` / `back` / `newIntent`；同事件多个处理器按注册顺序执行 |
-| `app.exit()` | 结束 Activity |
-| `app.info()` | 返回 `{name, package, versionName, versionCode, sdk, platform}` |
+| `app.on(event, fn)` | `boot` / `create` / `pause` / `resume` / `destroy` / `back` / `newIntent` / `notification` / `task`；同事件多个处理器按注册顺序执行 |
+| `app.exit()` | 结束当前界面；Lua 运行时与后台任务继续存活 |
+| `app.info()` | 返回 `{name, package, versionName, versionCode, sdk, platform, foreground}` |
 
-- `create`：所有处理器执行完，若没有调用 `web.load`，自动加载 `startUrl`。
+- `boot`：进程启动、入口执行完后触发一次，可能没有前台界面。
+- `create`：每次 Activity 绑定后触发；所有处理器执行完，若没有调用 `web.load`，自动加载 `startUrl`。
+- `destroy`：当前界面销毁时触发；不结束 Lua 运行时，也不取消在途 HTTP。
 - `back`：任一处理器返回 `true` 表示已处理；否则交给 WebView 历史，最后退出。
 - `newIntent(url)`：深链唤起（需在 `app.json` 配置 `deepLinks`）。冷启动时在 `create` 之后补发。内容不可信，使用前必须校验。
+- `notification(event)`：用户点击本地通知（需 `notify` 能力）。`event = { id, data, coldStart }`；`coldStart` 表示进程此前没有绑定过界面，冷启动在 `create` 之后送达。
+- `task(ctx)`：定时任务触发（需 `task` 能力），可能没有前台界面。`ctx = { name, data, scheduledAt, firedAt, late, runId, done }`，单位均为秒；**必须调用 `ctx.done()`**（异步完成时在回调里调用），否则到达 `timeout` 才结束。详见 6.12。
 
 ```lua
 app.on("back", function()
@@ -273,7 +285,55 @@ end)
 | `device.locale()` | 如 `zh_CN` |
 | `device.screen()` | `{ width, height, density, dpi }` |
 
-### 6.11 json 与 log
+### 6.11 notify（需 `capabilities: ["notify"]`）
+
+| API | 说明 |
+| --- | --- |
+| `notify.show(opts)` / `notify.show(title, body)` | 显示或替换通知；成功返回 id，失败返回 `nil, err` |
+| `notify.cancel(id)` / `notify.cancelAll()` | 取消指定 / 全部通知 |
+| `notify.enabled()` | 权限与系统通知开关均可用时为 `true` |
+| `notify.channel({ id, name, description, importance })` | 创建/更新通道（API 26+；重要性首次创建后不可变） |
+
+`notify.show` 的 `opts`：`id`（string 映射 tag / 正整数映射 notificationId / 缺省自增）、`title`（默认应用名，≤512）、`body`（≤8192）、`channel`（默认 `"default"`）、`data`（随点击事件返回，≤64KB）、`ongoing`、`autoCancel`（默认 `true`）。能力会自动写入 `POST_NOTIFICATIONS`；API 33+ 仍需 `permission.request`，未授权时 `show` 返回 `nil, "通知权限未授予"`。
+
+```lua
+notify.channel({ id = "alerts", name = "提醒", importance = "high" })
+notify.show({ id = "daily", title = "提醒", body = "点击查看", channel = "alerts",
+  data = { page = "today" } })
+
+app.on("notification", function(event)
+  log("clicked", event.id, json.encode(event.data), tostring(event.coldStart))
+end)
+```
+
+点击通知走显式 `MainActivity` Intent，携带每次安装随机 token；伪造或无效 payload 会被丢弃。启用能力后 Activity 自动为 `launchMode="singleTask"`，热启动走 `onNewIntent`。
+
+### 6.12 task（需 `capabilities: ["task"]`）
+
+| API | 说明 |
+| --- | --- |
+| `task.schedule(name, opts)` | 创建或替换任务；返回信息表，失败 `nil, err` |
+| `task.cancel(name)` | 取消任务、闹钟与待运行 Job；返回原本是否存在 |
+| `task.list()` | 按名称排序的任务数组 |
+| `task.exact()` | 当前是否允许精确闹钟（API 31 以下恒为 `true`） |
+
+名字匹配 `^[A-Za-z_][A-Za-z0-9_.-]{0,63}$`。`opts`：`every`（间隔秒，≥900）/ `daily`（`"HH:MM"`）/ `delay`（一次性秒数）三选一；`data`（随事件返回，≤64KB，明文存储）；`exact`（无权限时自动降级）；`timeout`（10-600 秒，默认 60）；`replace`（默认 `true`，同名且为 `false` 时报错）。最多 64 个任务，`every`/`delay` 上限 30 天。无任务时 `task.list()` 为空表，编码到 JS 是 `{}`，前端用 `Array.isArray` 判断。
+
+触发时 `app.on("task", function(ctx) ... end)` 的 `ctx` 含 `name`、`data`、`scheduledAt`、`firedAt`（epoch 秒）、`late`（晚于计划 60 秒以上）、`runId`、`done()`。**Handler 返回不代表完成**：必须在异步回调里调用 `ctx.done()`，否则等到 `timeout` 才结束；重复调用安全。开机、应用更新、改时间/时区后过期任务只补一次并标记 `late`，不重放积压。`exact` 只影响闹钟精度，JobScheduler 执行仍是 best-effort；force-stop 会取消闹钟，Doze/厂商策略下可能延迟。
+
+```lua
+task.schedule("sync", { every = 900, data = { since = 123 } })
+
+app.on("task", function(ctx)
+  if ctx.name == "sync" then
+    http.request({ url = "https://example.com/sync", cb = function() ctx.done() end })
+  else
+    ctx.done()
+  end
+end)
+```
+
+### 6.13 json 与 log
 
 ```lua
 local text = json.encode({ a = 1 })      -- '{"a":1}'
@@ -283,17 +343,23 @@ log("tag", 123)                            -- Logcat，tag = berba
 
 JSON 转换：键为 `1..n` 连续整数的表编码为数组，否则为对象（空表为 `{}`）；`nil` → `null`；函数/userdata 编码为 `null`；存在循环引用或嵌套超过 64 层时整个结果为 `"null"`。
 
-### 6.12 dev 浏览器运行时
+### 6.14 dev 浏览器运行时
 
 `berba dev` 在项目启用 Lua 时用 fengari 执行 `lua.entry`（Lua 5.3），设备壳是 LuaJ（Lua 5.2）。`require`、`bridge.register`、`bridge.emit`、`app.on("create")`、`web.on("pageFinished")` 行为一致；入口抛错时 pending 的 `berba.call` 会 reject。
 
 | 能力 | 浏览器行为 |
 | --- | --- |
+| 能力开关 | 模块与事件白名单来自 `app.json` 的 `capabilities`：未声明 `notify`/`task`/`native` 时对应的表不存在，`app.on("notification")`/`app.on("task")` 报未知事件（与设备一致） |
 | `app.info()` | `platform = "browser"`、`sdk = 0`，其余来自 `app.json` |
 | `app.on("back")` | 浏览器拦不到返回键，用 `window.__berbaDev.back()` 手动触发 |
 | `app.on("newIntent")` | 不触发 |
+| `app.on("notification")` | 需 `notify` 能力；浏览器通知点击时触发；页面关闭后不再回调，可用 `window.__berbaDev.notify(id, data)` 手动触发 |
+| `app.on("task")` | 需 `task` 能力；可以注册，但浏览器不会自动触发；需在设备上验证 |
+| `task.*` | `schedule` 直接报「浏览器不支持后台任务」；`cancel` 返回 `false`；`list` 为空数组；`exact` 为 `false` |
+| `native.*` | `native.list()` 返回 `app.json` 声明的插件/模块/函数（`ok = false`），插件函数抛「原生插件仅在设备上可用」；用 `dev/mock.js` 伪造结果 |
 | `pause` / `resume` | 绑定页面 `visibilitychange` |
-| `permission.*` | 一律视为已授权，不能验证真实授权流程 |
+| `permission.*` | 除 `POST_NOTIFICATIONS` 使用浏览器权限外，其余视为已授权 |
+| `notify.*` | 基于 Web Notifications：`channel` 校验参数但不生效；`permission.request("POST_NOTIFICATIONS")` 会弹浏览器授权（通常需要用户手势，建议由按钮触发） |
 | `store` / `file` | 落在 `localStorage`，清站点数据即丢失；单文件仍限 8MB |
 | `http.*` | 受 CORS 限制；明文 `http://` 不拦截；`onProgress` 的总长可能为 `-1` |
 | `ui.statusBar` | no-op |
@@ -304,6 +370,29 @@ JSON 转换：键为 `1..n` 连续整数的表编码为数组，否则为对象�
 
 - `--host 0.0.0.0` 会把项目源码与 Lua 执行能力暴露到局域网，仅真机联调时临时使用，用完改回 `127.0.0.1`。
 - 浏览器通过不代表设备通过：提交前仍需 `berba build` 并上机验证权限、文件、方向与全屏。
+
+### 6.15 native（需 `capabilities: ["native"]`）
+
+模块与函数名来自插件 `spec.json`，构建期合并进能力资产；未声明的模块/函数不可见。
+
+| 形式 | 说明 |
+| --- | --- |
+| `local v, err = native.<module>.<fn>(args)` | 同步；参数/结果均为 JSON，成功返回解析后的 Lua 值，失败返回 `nil, err` |
+| `native.<module>.<fn>(args, cb)` | 异步（`spec.json` 标记 `async`）；`cb(result, err)` 在 Lua 线程执行 |
+| `native.list()` | 已加载插件数组：`name`、`lib`、`ok`、`error`（失败时）与 `modules`（函数及 `async` 标记） |
+
+```lua
+local value, err = native.echo.greet({ name = "berba" })
+native.echo.greet_later({ name = "berba" }, function(result, e)
+  if e then log("失败: " .. e) else log(json.encode(result)) end
+end)
+```
+
+- 上限：参数 1MB、结果 8MB、`config` 64KB；异步并发 256、超时 30 秒。同步调用在 Lua 线程执行，插件必须快速返回，耗时工作要声明 `async`。
+- 插件在应用启动时加载；单个插件加载或 `init` 失败时，它的函数被替换为抛错桩（`原生插件 <name> 加载失败: ...`），其他插件照常可用。没有启用 `native` 能力的项目里 `native` 表根本不存在，用 `if native then ... end` 兜底。
+- 修改插件源码后必须重新编译 `<dir>/lib/<abi>/`，`berba build` 不会替你调用 NDK。
+- 插件是受信任的原生代码，与壳同进程、拥有应用全部权限；它返回的数据在 Lua/页面侧仍要校验与转义。
+- 设备上的 `log` 走 Logcat（tag `berba`），插件内通过宿主 `log` 写入（tag `berba-plugin`）。
 
 ## 7. 关键约定与陷阱
 
@@ -326,8 +415,11 @@ JSON 转换：键为 `1..n` 连续整数的表编码为数组，否则为对象�
 3. 可选 `berba doctor` 确认工具链完整。
 4. 安装后检查：启动页加载、`berba.call` 往返、`bridge.emit` 推送、`pageFinished` 事件、返回键行为。
 5. 涉及权限时：首次申请、拒绝后再次申请、未声明权限的负例。
-6. 涉及存储/文件时：重启应用后数据仍在；路径越界被拒。
-7. 涉及全屏/常亮/方向时：切换应用再回来状态正确。
+6. 涉及通知时：API 33+ 授权/拒绝、通道、热启动与冷启动点击、取消；确认点击只触发一次。
+7. 涉及定时任务时：`delay` 触发一次、`every` 自动重排、`daily` 按本地时间；异步回调中 `ctx.done()`、超时结束、重复 `done`、运行中 `cancel`；重启/改时间后任务仍在。
+8. 涉及存储/文件时：重启应用后数据仍在；路径越界被拒。
+9. 涉及全屏/常亮/方向时：切换应用再回来状态正确。
+10. 涉及原生插件时：用 NDK 重新编译 `<dir>/lib/<abi>/` 与 `payload/native/` 后 `berba build`；上机确认 `native.list()` 中插件 `ok = true`、同步调用返回、异步回调恰好一次、init 失败插件的调用报出错误文本，且其他插件仍可用。浏览器里只能验证元数据可见性（见 6.14）。
 
 ## 9. 安全要求
 

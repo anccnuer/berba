@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"berba/internal/capability"
 	"berba/internal/config"
 )
 
@@ -130,6 +131,61 @@ func TestRenderDeepLinks(t *testing.T) {
 	}
 	if strings.Contains(string(plain), "singleTask") || strings.Contains(string(plain), "intent.action.VIEW") {
 		t.Fatalf("无深链时不应出现深链配置:\n%s", plain)
+	}
+}
+
+func TestRenderCapabilityAdditions(t *testing.T) {
+	p := testProject()
+	res := &capability.Resolved{
+		Capabilities:      []string{"notify", "task"},
+		Permissions:       []string{"android.permission.POST_NOTIFICATIONS"},
+		Components:        []string{"task_job_service", "task_boot_receiver"},
+		ExtractNativeLibs: true,
+	}
+	data, err := RenderResolved(p, false, res)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Validate(data); err != nil {
+		t.Fatal(err)
+	}
+	out := string(data)
+	for _, want := range []string{
+		`android:name="android.permission.POST_NOTIFICATIONS"`,
+		`android:name="com.berba.shell.TaskJobService"`,
+		`android:permission="android.permission.BIND_JOB_SERVICE"`,
+		`android:name="com.berba.shell.TaskBootReceiver"`,
+		`android:name="android.intent.action.BOOT_COMPLETED"`,
+		`android:launchMode="singleTask"`,
+		`android:extractNativeLibs="true"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("manifest missing %s\n%s", want, out)
+		}
+	}
+	perm := strings.Index(out, "android.permission.CAMERA")
+	capPerm := strings.Index(out, "android.permission.POST_NOTIFICATIONS")
+	internet := strings.Index(out, "android.permission.INTERNET")
+	if !(perm < capPerm && capPerm < internet) {
+		t.Fatalf("permission order is wrong: camera=%d cap=%d internet=%d", perm, capPerm, internet)
+	}
+}
+
+func TestRenderCapabilityUnknownComponent(t *testing.T) {
+	_, err := RenderResolved(testProject(), false, &capability.Resolved{
+		Components: []string{"bogus"},
+	})
+	if err == nil {
+		t.Fatal("expected unknown component error")
+	}
+}
+
+func TestValidateRejectsMalformedXML(t *testing.T) {
+	if err := Validate([]byte(`<manifest><application></manifest>`)); err == nil {
+		t.Fatal("expected malformed XML rejection")
+	}
+	if err := Validate([]byte(`<html></html>`)); err == nil {
+		t.Fatal("expected non-manifest root rejection")
 	}
 }
 

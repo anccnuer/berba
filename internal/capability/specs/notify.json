@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "name": "notify",
+  "kind": "capability",
+  "summary": "本地通知：显示、取消、通道与点击事件。",
+  "requiresLua": true,
+  "permissions": ["android.permission.POST_NOTIFICATIONS"],
+  "resources": ["notification_icon"],
+  "installer": "NotifyModule",
+  "modules": {
+    "notify": {
+      "browser": "partial",
+      "functions": {
+        "show": {"async": false, "foreground": false, "doc": "显示或替换通知；无权限时返回 nil 与错误信息。"},
+        "cancel": {"async": false, "foreground": false, "doc": "取消指定通知。"},
+        "cancelAll": {"async": false, "foreground": false, "doc": "取消本应用的全部通知。"},
+        "enabled": {"async": false, "foreground": false, "doc": "返回通知权限与系统开关是否可用。"},
+        "channel": {"async": false, "foreground": false, "doc": "创建或更新通知通道（API 26+）。"}
+      }
+    }
+  },
+  "events": {
+    "notification": {"owner": "app", "foreground": true, "doc": "用户点击通知；冷启动在 create 之后触发。"}
+  }
+}

@@ -2,12 +2,16 @@
  * berba dev 浏览器 Lua 运行时。
  *
  * 基于 fengari（Lua 5.3），把设备壳里的 berba Lua API 尽量等价地模拟到浏览器：
- * app / web / bridge / http / file / store / permission / ui / device / json / log。
+ * app / web / bridge / http / file / store / permission / ui / device / notify / task / native / json / log。
  *
  * 与设备的差异（dev 专属，见 docs/build.md）：
- *   - 平台标识为 "browser"，sdk 为 0；permission 一律视为已授权；
+ *   - 平台标识为 "browser"，sdk 为 0；除通知权限外 permission 一律视为已授权；
  *   - file 与 store 落在 localStorage；剪贴板读取、状态栏、方向锁定等能力降级或不可用；
  *   - http 直连受浏览器 CORS 限制；明文 http 不拦截；
+ *   - notify 使用 Web Notifications：无通道、页面关闭后通知点击不再回调；
+ *   - task 只能注册 app.on("task")，task.schedule 直接报“浏览器不支持后台任务”；
+ *   - native.list 返回插件/模块信息，所有插件函数抛“原生插件仅在设备上可用”；
+ *   - 未启用的能力不安装对应模块；事件白名单来自 lua.json 的能力元数据；
  *   - 浏览器返回键无法拦截，用 window.__berbaDev.back() 手动触发 app.on("back")。
  *
  * 对外只暴露 window.__berbaLua = { init(cfg) -> Promise<{ call, has }> }。
@@ -220,12 +224,19 @@
   var appMeta = {};
   var moduleRefs = Object.create(null);
   var moduleLoading = Object.create(null);
-  var handlers = { create: [], pause: [], resume: [], destroy: [], back: [], newIntent: [] };
+  var handlers = {
+    boot: [], create: [], pause: [], resume: [], destroy: [], back: [], newIntent: [],
+    notification: [], task: []
+  };
   var webHandlers = { pageStarted: [], pageFinished: [], error: [] };
   var bridges = Object.create(null);
   var webLoaded = false;
   var initialized = null;
   var wakeLock = null;
+  var capabilityMeta = null;
+  var moduleMeta = null;
+  var eventMeta = null;
+  var nativeMeta = null;
 
   function newState() {
     var state = lauxlib.luaL_newstate();
@@ -437,13 +448,31 @@
   function registerHandler(bucket, L, event, fnIndex) {
     if (!isFunction(L, fnIndex)) return luaError(L, 'bad argument #2 (function expected)');
     var ref = refFunction(L, fnIndex);
-    bucket[event].push(ref);
+    var list = bucket[event] || (bucket[event] = []);
+    list.push(ref);
     return 0;
   }
 
   // --------------------------------------------------------------- app
 
-  var APP_EVENTS = { create: 1, pause: 1, resume: 1, destroy: 1, back: 1, newIntent: 1 };
+  var CORE_APP_EVENTS = ['boot', 'create', 'pause', 'resume', 'destroy', 'back', 'newIntent'];
+  var CORE_WEB_EVENTS = ['pageStarted', 'pageFinished', 'error'];
+
+  function buildEventSet(owner, core, legacy) {
+    var set = {};
+    var i;
+    for (i = 0; i < core.length; i++) set[core[i]] = 1;
+    if (eventMeta && Array.isArray(eventMeta[owner])) {
+      for (i = 0; i < eventMeta[owner].length; i++) {
+        if (typeof eventMeta[owner][i] === 'string') set[eventMeta[owner][i]] = 1;
+      }
+    } else if (!eventMeta) {
+      for (i = 0; i < legacy.length; i++) set[legacy[i]] = 1;
+    }
+    return set;
+  }
+
+  var APP_EVENTS = null;
 
   function appOn(L) {
     var event = argString(L, 1);
@@ -468,13 +497,14 @@
       versionName: appMeta.versionName || '',
       versionCode: typeof appMeta.versionCode === 'number' ? appMeta.versionCode : 0,
       sdk: 0,
-      platform: 'browser'
+      platform: 'browser',
+      foreground: true
     });
   }
 
   // --------------------------------------------------------------- web
 
-  var WEB_EVENTS = { pageStarted: 1, pageFinished: 1, error: 1 };
+  var WEB_EVENTS = null;
 
   function webLoad(L) {
     var url = argString(L, 1);
@@ -1010,6 +1040,11 @@
   function permissionCheck(L) {
     var name = argString(L, 1);
     if (!name) return luaError(L, "bad argument #1 to 'permission.check' (string expected)");
+    if (fullPermission(name) === 'android.permission.POST_NOTIFICATIONS'
+        && typeof window.Notification === 'function') {
+      pushBool(L, Notification.permission === 'granted');
+      return 1;
+    }
     pushBool(L, true);
     return 1;
   }
@@ -1029,11 +1064,301 @@
     if (!isFunction(L, 2)) return luaError(L, "bad argument #2 to 'permission.request' (function expected)");
     var cb = refFunction(L, 2);
     var result = {};
+    var pending = null;
     names.forEach(function (n) {
-      if (typeof n === 'string' && n) result[fullPermission(n)] = true;
+      if (typeof n !== 'string' || !n) return;
+      var full = fullPermission(n);
+      result[full] = true;
+      if (full !== 'android.permission.POST_NOTIFICATIONS') return;
+      if (typeof window.Notification !== 'function') {
+        result[full] = false;
+      } else if (Notification.permission === 'granted') {
+        result[full] = true;
+      } else if (Notification.permission === 'denied') {
+        result[full] = false;
+        console.warn('[berba dev] 浏览器已拒绝通知权限，请在站点设置中重新允许');
+      } else {
+        result[full] = false;
+        pending = Notification.requestPermission();
+      }
     });
-    setTimeout(function () { callRef(L, cb, [result]); }, 0);
+    if (pending && pending.then) {
+      pending.then(function (state) {
+        result['android.permission.POST_NOTIFICATIONS'] = state === 'granted';
+        callRef(L, cb, [result]);
+      }).catch(function (e) {
+        console.warn('[berba dev] 请求通知权限失败', e);
+        callRef(L, cb, [result]);
+      });
+    } else {
+      setTimeout(function () { callRef(L, cb, [result]); }, 0);
+    }
     return 0;
+  }
+
+  // -------------------------------------------------------------- notify
+
+  var notifications = Object.create(null);
+  var notifySeq = 1;
+
+  function notifySupported() {
+    return typeof window.Notification === 'function';
+  }
+
+  function channelIdError(id) {
+    if (id.length > 64) return 'notify channel id 不能超过 64 字符';
+    if (!/^[A-Za-z0-9_.-]+$/.test(id)) return 'notify channel id 只能包含字母、数字、_ - .';
+    return null;
+  }
+
+  function readChannel(raw) {
+    var id = typeof raw === 'string' && raw.trim() ? raw.trim() : 'default';
+    var err = channelIdError(id);
+    return err ? { error: err } : { id: id };
+  }
+
+  function readNotifyId(value, allowAuto) {
+    if (value === null || value === undefined) {
+      if (!allowAuto) return { error: 'notify.cancel 需要 id' };
+      var next = notifySeq++;
+      return { key: 'n:' + next, id: next };
+    }
+    if (typeof value === 'number') {
+      var n = Math.floor(value);
+      if (value !== n || n <= 0) return { error: 'notify id 必须是正整数或非空字符串' };
+      return { key: 'n:' + n, id: n };
+    }
+    if (typeof value === 'string') {
+      if (!value || value.length > 256) return { error: '通知 id 长度需在 1-256 之间' };
+      return { key: 's:' + value, id: value };
+    }
+    return { error: 'notify id 必须是正整数或非空字符串' };
+  }
+
+  function pushNotifyId(L, id) {
+    if (typeof id === 'string') pushStr(L, id);
+    else pushNumber(L, id);
+    return 1;
+  }
+
+  function payloadTooLarge(data) {
+    try {
+      var text = JSON.stringify(data);
+      return text !== undefined && text.length > 64 * 1024;
+    } catch (e) {
+      return true;
+    }
+  }
+
+  function notifyShow(L) {
+    var title = '';
+    var body = '';
+    var data = null;
+    var ongoing = false;
+    var autoCancel = true;
+    var rawId = null;
+
+    if (lua.lua_type(L, 1) === lua.LUA_TTABLE) {
+      var t = readJsValue(L, 1) || {};
+      if (typeof t.title === 'string') title = t.title;
+      if (typeof t.body === 'string') body = t.body;
+      if (t.channel !== undefined && t.channel !== null) {
+        var ch = readChannel(t.channel);
+        if (ch.error) return luaError(L, ch.error);
+      }
+      if (t.data !== undefined) data = t.data;
+      ongoing = t.ongoing === true;
+      if (t.autoCancel !== undefined && t.autoCancel !== null) autoCancel = t.autoCancel !== false;
+      rawId = t.id;
+    } else if (lua.lua_type(L, 1) === lua.LUA_TSTRING
+        || lua.lua_type(L, 1) === lua.LUA_TNUMBER) {
+      title = argString(L, 1);
+      body = optString(L, 2, '');
+    } else {
+      return luaError(L, 'notify.show 需要 table 或标题字符串');
+    }
+
+    if (!notifySupported()) {
+      lua.lua_pushnil(L);
+      pushStr(L, '当前浏览器不支持通知');
+      return 2;
+    }
+    if (Notification.permission !== 'granted') {
+      console.warn('[berba dev] 通知权限未授予，请先调用 permission.request("POST_NOTIFICATIONS")');
+      lua.lua_pushnil(L);
+      pushStr(L, '通知权限未授予');
+      return 2;
+    }
+    if (payloadTooLarge(data)) {
+      return luaError(L, '通知 payload 超过 64KB');
+    }
+
+    var id = readNotifyId(rawId, true);
+    if (id.error) return luaError(L, id.error);
+
+    if (!title.trim()) title = appMeta.name || '通知';
+    try {
+      var old = notifications[id.key];
+      if (old) {
+        try { old.close(); } catch (e) { /* ignore */ }
+      }
+      var n = new Notification(title, {
+        body: body,
+        tag: id.key,
+        requireInteraction: ongoing
+      });
+      notifications[id.key] = n;
+      n.onclick = function () {
+        try { window.focus(); } catch (e) { /* ignore */ }
+        if (autoCancel) {
+          try { n.close(); } catch (e) { /* ignore */ }
+        }
+        fireHandlers('notification', [{ id: id.id, data: data, coldStart: false }]);
+      };
+      n.onclose = function () {
+        if (notifications[id.key] === n) delete notifications[id.key];
+      };
+      return pushNotifyId(L, id.id);
+    } catch (e) {
+      lua.lua_pushnil(L);
+      pushStr(L, '显示通知失败: ' + (e && e.message ? e.message : e));
+      return 2;
+    }
+  }
+
+  function notifyCancel(L) {
+    var value = isNil(L, 1) ? null : readJsValue(L, 1);
+    if (value === null || value === undefined) {
+      return luaError(L, 'notify.cancel 需要 id');
+    }
+    var id = readNotifyId(value, false);
+    if (id.error) return luaError(L, id.error);
+    var n = notifications[id.key];
+    if (!n) {
+      pushBool(L, false);
+      return 1;
+    }
+    delete notifications[id.key];
+    try { n.close(); } catch (e) { /* ignore */ }
+    pushBool(L, true);
+    return 1;
+  }
+
+  function notifyCancelAll(L) {
+    Object.keys(notifications).forEach(function (key) {
+      var n = notifications[key];
+      delete notifications[key];
+      try { n.close(); } catch (e) { /* ignore */ }
+    });
+    return 0;
+  }
+
+  function notifyEnabled(L) {
+    pushBool(L, notifySupported() && Notification.permission === 'granted');
+    return 1;
+  }
+
+  function notifyChannel(L) {
+    if (lua.lua_type(L, 1) !== lua.LUA_TTABLE) {
+      return luaError(L, "bad argument #1 to 'notify.channel' (table expected)");
+    }
+    var t = readJsValue(L, 1) || {};
+    var ch = readChannel(t.id);
+    if (ch.error) return luaError(L, ch.error);
+    var importance = typeof t.importance === 'string' ? t.importance : 'default';
+    if (importance !== 'min' && importance !== 'low'
+        && importance !== 'default' && importance !== 'high') {
+      return luaError(L, 'importance 只能是 min/low/default/high: ' + importance);
+    }
+    // 浏览器没有通道概念；保持设备侧相同的入参校验即可。
+    pushBool(L, true);
+    return 1;
+  }
+
+  // -------------------------------------------------------------- task
+
+  // 浏览器没有后台调度；保留表与事件注册，排程时明确报错。
+  function taskSchedule(L) {
+    return luaError(L, '浏览器不支持后台任务');
+  }
+
+  function taskCancel(L) {
+    pushBool(L, false);
+    return 1;
+  }
+
+  function taskList(L) {
+    lua.lua_newtable(L);
+    return 1;
+  }
+
+  function taskExact(L) {
+    pushBool(L, false);
+    return 1;
+  }
+
+  // -------------------------------------------------------------- native
+
+  function unsupportedNativeFn(label) {
+    return function (L) {
+      return luaError(L, '原生插件仅在设备上可用（' + label + '）');
+    };
+  }
+
+  function nativeList(L) {
+    var plugins = nativeMeta && Array.isArray(nativeMeta.plugins) ? nativeMeta.plugins : [];
+    var out = [];
+    for (var i = 0; i < plugins.length; i++) {
+      var p = plugins[i] || {};
+      var entry = {
+        name: p.name || '',
+        lib: p.libName || ('libberba_' + (p.name || '') + '.so'),
+        ok: false,
+        error: '原生插件仅在设备上可用',
+        modules: {}
+      };
+      var mods = p.modules || {};
+      Object.keys(mods).sort().forEach(function (modName) {
+        var fns = (mods[modName] && mods[modName].functions) || {};
+        var functions = {};
+        Object.keys(fns).sort().forEach(function (fnName) {
+          functions[fnName] = { async: !!(fns[fnName] && fns[fnName].async) };
+        });
+        entry.modules[modName] = { functions: functions };
+      });
+      out.push(entry);
+    }
+    return pushValueTable(L, out);
+  }
+
+  function installNative(L) {
+    lua.lua_newtable(L);
+    var t = lua.lua_gettop(L);
+    lua.lua_pushjsfunction(L, nativeList);
+    lua.lua_setfield(L, t, utf8('list'));
+
+    var plugins = nativeMeta && Array.isArray(nativeMeta.plugins) ? nativeMeta.plugins : [];
+    var seen = Object.create(null);
+    for (var i = 0; i < plugins.length; i++) {
+      var mods = (plugins[i] && plugins[i].modules) || {};
+      Object.keys(mods).sort().forEach(function (modName) {
+        if (modName === 'list') return;
+        if (seen[modName]) {
+          console.error('[berba dev] 原生模块名冲突，已忽略: ' + modName);
+          return;
+        }
+        seen[modName] = true;
+        lua.lua_newtable(L);
+        var mt = lua.lua_gettop(L);
+        var fns = (mods[modName] && mods[modName].functions) || {};
+        Object.keys(fns).sort().forEach(function (fnName) {
+          lua.lua_pushjsfunction(L, unsupportedNativeFn('native.' + modName + '.' + fnName));
+          lua.lua_setfield(L, mt, utf8(fnName));
+        });
+        lua.lua_setfield(L, t, utf8(modName));
+      });
+    }
+    lua.lua_setglobal(L, utf8('native'));
   }
 
   // ---------------------------------------------------------------- ui
@@ -1328,7 +1653,58 @@
     lua.lua_setglobal(L, utf8(name));
   }
 
+  function capabilityEnabled(name) {
+    if (!capabilityMeta) return true;
+    return capabilityMeta[name] === true;
+  }
+
+  function stubFunction(label) {
+    return function (L) {
+      return luaError(L, '能力未在当前壳中实现: ' + label);
+    };
+  }
+
+  // 与设备壳一致：能力元数据声明了但运行时未安装的模块/函数安装抛错桩。
+  function applyModuleMeta(L) {
+    if (!moduleMeta) return;
+    Object.keys(moduleMeta).sort().forEach(function (name) {
+      var fns = Array.isArray(moduleMeta[name]) ? moduleMeta[name] : [];
+      lua.lua_getglobal(L, utf8(name));
+      if (!lua.lua_istable(L, -1)) {
+        lua.lua_pop(L, 1);
+        console.error('[berba dev] 能力模块未安装，已安装抛错桩: ' + name);
+        var members = {};
+        fns.forEach(function (fn) { members[fn] = stubFunction(name + '.' + fn); });
+        setModule(L, name, members);
+        return;
+      }
+      fns.forEach(function (fn) {
+        lua.lua_getfield(L, -1, utf8(fn));
+        if (!lua.lua_isfunction(L, -1)) {
+          lua.lua_pop(L, 1);
+          console.error('[berba dev] 能力函数未安装，已安装抛错桩: ' + name + '.' + fn);
+          lua.lua_pushjsfunction(L, stubFunction(name + '.' + fn));
+          lua.lua_setfield(L, -2, utf8(fn));
+        } else {
+          lua.lua_pop(L, 1);
+        }
+      });
+      lua.lua_pop(L, 1);
+    });
+  }
+
+  function checkCapabilities() {
+    if (!capabilityMeta) return;
+    Object.keys(capabilityMeta).sort().forEach(function (name) {
+      if (name !== 'native' && name !== 'notify' && name !== 'task') {
+        console.error('[berba dev] 壳未实现能力: ' + name + '（相关函数将抛错）');
+      }
+    });
+  }
+
   function registerGlobals(L) {
+    APP_EVENTS = buildEventSet('app', CORE_APP_EVENTS, ['notification', 'task']);
+    WEB_EVENTS = buildEventSet('web', CORE_WEB_EVENTS, []);
     setModule(L, 'app', { on: appOn, exit: appExit, info: appInfo });
     setModule(L, 'web', {
       load: webLoad,
@@ -1350,6 +1726,20 @@
       get: storeGet, set: storeSet, remove: storeRemove, keys: storeKeys
     });
     setModule(L, 'permission', { check: permissionCheck, request: permissionRequest });
+    if (capabilityEnabled('notify')) {
+      setModule(L, 'notify', {
+        show: notifyShow, cancel: notifyCancel, cancelAll: notifyCancelAll,
+        enabled: notifyEnabled, channel: notifyChannel
+      });
+    }
+    if (capabilityEnabled('task')) {
+      setModule(L, 'task', {
+        schedule: taskSchedule, cancel: taskCancel, list: taskList, exact: taskExact
+      });
+    }
+    if (capabilityEnabled('native')) {
+      installNative(L);
+    }
     setModule(L, 'ui', {
       toast: uiToast, statusBar: uiStatusBar, alert: uiAlert, confirm: uiConfirm,
       fullscreen: uiFullscreen, keepScreenOn: uiKeepScreenOn
@@ -1368,6 +1758,8 @@
     lua.lua_setglobal(L, utf8('require'));
 
     installBit32(L);
+    applyModuleMeta(L);
+    checkCapabilities();
   }
 
   // ---------------------------------------------------------------- 启动
@@ -1397,10 +1789,37 @@
       throw new Error(failure);
     }
 
+    fireHandlers('boot', []);
     fireHandlers('create', []);
     if (!webLoaded) fireWebHandlers('pageFinished', [location.href]);
     console.log('[berba dev] Lua 运行时就绪: ' + entryPath);
     return { call: callBridge, has: hasBridge };
+  }
+
+  function parseCapabilityMeta(cfg) {
+    if (!Array.isArray(cfg.capabilities)) return null;
+    var set = {};
+    cfg.capabilities.forEach(function (name) {
+      if (typeof name === 'string' && name) set[name] = true;
+    });
+    return set;
+  }
+
+  function parseModuleMeta(cfg) {
+    var src = cfg.modules;
+    if (!src || typeof src !== 'object') return null;
+    var out = {};
+    Object.keys(src).forEach(function (name) {
+      var value = src[name];
+      if (Array.isArray(value)) {
+        out[name] = value.filter(function (fn) { return typeof fn === 'string'; });
+      } else if (value && typeof value === 'object') {
+        out[name] = Object.keys(value.functions || {});
+      } else {
+        out[name] = [];
+      }
+    });
+    return out;
   }
 
   function init(cfg) {
@@ -1409,6 +1828,10 @@
     files = cfg.files || {};
     entryPath = String(cfg.entry || 'main.lua').replace(/^\/+/, '');
     appMeta = cfg.app || {};
+    capabilityMeta = parseCapabilityMeta(cfg);
+    moduleMeta = parseModuleMeta(cfg);
+    eventMeta = cfg.events && typeof cfg.events === 'object' ? cfg.events : null;
+    nativeMeta = cfg.native && typeof cfg.native === 'object' ? cfg.native : null;
 
     initialized = new Promise(function (resolve, reject) {
       function start() {
@@ -1438,6 +1861,18 @@
     return fireHandlers('back', []);
   };
   window.__berbaDev.hasBridge = hasBridge;
+  // 浏览器通知在页面关闭后不再回调，用这个手动触发 app.on("notification")。
+  window.__berbaDev.notify = function (id, data) {
+    if (!L) {
+      console.warn('[berba dev] Lua 尚未就绪，无法触发 notification');
+      return false;
+    }
+    return fireHandlers('notification', [{
+      id: id === undefined ? null : id,
+      data: data === undefined ? null : data,
+      coldStart: false
+    }]);
+  };
 
   document.addEventListener('visibilitychange', function () {
     if (!L) return;

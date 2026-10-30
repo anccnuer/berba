@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "name": "native",
+  "kind": "capability",
+  "summary": "原生插件：C/C++/Rust 共享库，稳定 C ABI，构建期 ELF 校验。",
+  "requiresLua": true,
+  "installer": "NativeModule",
+  "modules": {
+    "native": {
+      "browser": "stub",
+      "functions": {
+        "list": {"async": false, "foreground": false, "doc": "返回已加载插件及其模块与函数；插件模块以 native.<module> 暴露。"}
+      }
+    }
+  }
+}

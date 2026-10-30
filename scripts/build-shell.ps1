@@ -84,17 +84,22 @@ $sources = Get-ChildItem -LiteralPath $Src -Recurse -Filter *.java | ForEach-Obj
 & $Javac --release 17 -encoding UTF-8 -cp "$AndroidJar;$Luaj" -d $Classes @sources
 if ($LASTEXITCODE -ne 0) { Die "javac 失败 (exit $LASTEXITCODE)" }
 
-Write-Host "==> Lua 沙箱冒烟测试"
-$TestSrc = Join-Path $Root "shell\app\src\test\java\com\berba\shell\LuaSandboxTest.java"
+Write-Host "==> JVM 冒烟测试"
+$TestSrc = Join-Path $Root "shell\app\src\test\java\com\berba\shell"
 if (Test-Path -LiteralPath $TestSrc) {
     $TestClasses = Join-Path $Work "test-classes"
     if (Test-Path -LiteralPath $TestClasses) { Remove-Item -LiteralPath $TestClasses -Recurse -Force }
     New-Item -ItemType Directory -Force -Path $TestClasses | Out-Null
-    & $Javac --release 17 -encoding UTF-8 -cp $Luaj -d $TestClasses `
-        (Join-Path $Src "com\berba\shell\LuaSandbox.java") $TestSrc
-    if ($LASTEXITCODE -ne 0) { Die "沙箱测试编译失败 (exit $LASTEXITCODE)" }
-    & $Java -cp "$TestClasses;$Luaj" com.berba.shell.LuaSandboxTest
-    if ($LASTEXITCODE -ne 0) { Die "Lua 沙箱冒烟测试失败 (exit $LASTEXITCODE)" }
+    $testSources = Get-ChildItem -LiteralPath $TestSrc -Filter *.java |
+        ForEach-Object { $_.FullName }
+    & $Javac --release 17 -encoding UTF-8 -cp "$Classes;$AndroidJar;$Luaj" `
+        -d $TestClasses @testSources
+    if ($LASTEXITCODE -ne 0) { Die "JVM 测试编译失败 (exit $LASTEXITCODE)" }
+    foreach ($test in $testSources) {
+        $testName = [System.IO.Path]::GetFileNameWithoutExtension($test)
+        & $Java -cp "$TestClasses;$Classes;$AndroidJar;$Luaj" "com.berba.shell.$testName"
+        if ($LASTEXITCODE -ne 0) { Die "测试失败: $testName (exit $LASTEXITCODE)" }
+    }
 }
 
 Write-Host "==> 打包 shell.jar"
@@ -113,5 +118,60 @@ $dexes = Get-ChildItem -LiteralPath $Dex -Filter "classes*.dex"
 if (-not $dexes) { Die "d8 未生成 classes.dex" }
 $dexes | Copy-Item -Destination $Out -Force
 
+$ShellManifest = Join-Path $Root "shell\shell.json"
+if (-not (Test-Path -LiteralPath $ShellManifest)) { Die "缺少 shell\shell.json（运行 go generate ./internal/capability）" }
+Copy-Item -LiteralPath $ShellManifest -Destination (Join-Path $Out "shell.json") -Force
+
+# NDK 可选：缺少时跳过 shim，仅影响启用原生插件的构建。
+$Ndk = $env:ANDROID_NDK_ROOT
+if (-not $Ndk) { $Ndk = $env:ANDROID_NDK_HOME }
+if (-not $Ndk) {
+    $ndkRoot = Join-Path $Sdk "ndk"
+    if (Test-Path -LiteralPath $ndkRoot) {
+        $Ndk = (Get-ChildItem -LiteralPath $ndkRoot -Directory |
+            Sort-Object {
+                $n = @(($_.Name -replace '[^0-9.]', '').Split('.') | Where-Object { $_ -ne '' })
+                while ($n.Count -lt 3) { $n += '0' }
+                [version]("$($n[0]).$($n[1]).$($n[2])")
+            } |
+            Select-Object -Last 1).FullName
+    }
+}
+
+if (-not $Ndk -or -not (Test-Path -LiteralPath $Ndk)) {
+    Write-Host "警告: 未找到 Android NDK（设置 ANDROID_NDK_ROOT 或安装到 SDK\ndk），跳过 JNI shim" -ForegroundColor Yellow
+    Write-Host "      已有 payload\native 保持不变；启用原生插件的构建需要 shim。" -ForegroundColor Yellow
+} else {
+    $Clang = Join-Path $Ndk "toolchains\llvm\prebuilt\windows-x86_64\bin\clang.exe"
+    if (-not (Test-Path -LiteralPath $Clang)) {
+        Write-Host "警告: 找不到 NDK clang（$Clang），跳过 JNI shim" -ForegroundColor Yellow
+    } else {
+        $ShimSrc = Join-Path $Root "shell\jni\berba_jni.c"
+        if (-not (Test-Path -LiteralPath $ShimSrc)) { Die "找不到 JNI shim 源码: $ShimSrc" }
+        $NativeOut = Join-Path $Out "native"
+        Write-Host "==> 编译 JNI shim（arm64-v8a / armeabi-v7a / x86_64）"
+        if (Test-Path -LiteralPath $NativeOut) { Remove-Item -LiteralPath $NativeOut -Recurse -Force }
+        $targets = @(
+            @("arm64-v8a", "aarch64-linux-android"),
+            @("armeabi-v7a", "armv7a-linux-androideabi"),
+            @("x86_64", "x86_64-linux-android")
+        )
+        foreach ($pair in $targets) {
+            $abi = $pair[0]
+            $dir = Join-Path $NativeOut $abi
+            New-Item -ItemType Directory -Force -Path $dir | Out-Null
+            & $Clang "--target=$($pair[1])24" "-shared" "-fPIC" "-O2" "-fvisibility=hidden" `
+                "-I" (Join-Path $Root "shell\jni") "-I" (Join-Path $Root "include") `
+                "-Wl,--no-undefined" "-Wl,-z,max-page-size=16384" "-Wl,--build-id=none" `
+                "-ffile-prefix-map=$Root=." `
+                "-o" (Join-Path $dir "libberba_jni.so") $ShimSrc "-llog" "-ldl" "-lm"
+            if ($LASTEXITCODE -ne 0) { Die "clang 编译 JNI shim 失败: $abi (exit $LASTEXITCODE)" }
+        }
+        Get-ChildItem -LiteralPath $NativeOut -Recurse -Filter "libberba_jni.so" |
+            Format-Table FullName, Length
+    }
+}
+
 Write-Host "==> 完成"
 Get-ChildItem -LiteralPath $Out -Filter "classes*.dex" | Format-Table Name, Length
+Get-Item -LiteralPath (Join-Path $Out "shell.json") | Format-Table Name, Length

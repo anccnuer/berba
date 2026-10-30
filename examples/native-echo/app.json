@@ -1,0 +1,31 @@
+{
+  "name": "Native Echo 示例",
+  "package": "com.example.nativeecho",
+  "versionName": "1.0.0",
+  "versionCode": 1,
+  "orientation": "portrait",
+  "theme": "light",
+  "cleartext": false,
+  "capabilities": ["native"],
+  "native": {
+    "plugins": [
+      {
+        "name": "echo",
+        "dir": ".",
+        "config": {"greeting": "你好"}
+      }
+    ]
+  },
+  "permissions": [],
+  "web": {
+    "dir": "www",
+    "startUrl": "https://appassets.androidhost/index.html",
+    "spa": false,
+    "allowedOrigins": []
+  },
+  "lua": {
+    "dir": "lua",
+    "entry": "main.lua"
+  },
+  "debug": false
+}

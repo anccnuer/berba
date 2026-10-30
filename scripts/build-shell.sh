@@ -111,8 +111,11 @@ if [ -d "$TEST_DIR" ]; then
   JAVA_CMD="${JAVA_BIN}java"
   command -v "$JAVA_CMD" >/dev/null 2>&1 || die "找不到 java（需要完整 JDK，可设置 JAVA_HOME）"
   TEST_CP="$WORK_ARG/test-classes$CPSEP$WORK_ARG/classes$CPSEP$ANDROID_JAR_ARG$CPSEP$LUAJ_ARG"
-  "$JAVA_CMD" -cp "$TEST_CP" com.berba.shell.LuaSandboxTest
-  "$JAVA_CMD" -cp "$TEST_CP" com.berba.shell.NetworkPolicyTest
+  for test in "$TEST_DIR"/*Test.java; do
+    [ -f "$test" ] || continue
+    cls="$(basename "$test" .java)"
+    "$JAVA_CMD" -cp "$TEST_CP" "com.berba.shell.$cls"
+  done
 fi
 
 echo "==> 打包 shell.jar"
@@ -131,5 +134,58 @@ for dex in "$WORK"/dex/classes*.dex; do
   cp "$dex" "$OUT/"
 done
 
+[ -f "$ROOT/shell/shell.json" ] || die "缺少 shell/shell.json（运行 go generate ./internal/capability）"
+cp "$ROOT/shell/shell.json" "$OUT/shell.json"
+
+# NDK 可选：缺少时跳过 shim，仅影响启用原生插件的构建。
+NDK="${ANDROID_NDK_ROOT:-${ANDROID_NDK_HOME:-}}"
+if [ -z "$NDK" ] && [ -d "$SDK/ndk" ]; then
+  NDK="$SDK/ndk/$(ls -1 "$SDK/ndk" | sort -V | tail -1)"
+fi
+
+hostpath() {
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -m "$1"
+  else
+    printf '%s' "$1"
+  fi
+}
+
+if [ -z "$NDK" ] || [ ! -d "$NDK" ]; then
+  echo "警告: 未找到 Android NDK（设置 ANDROID_NDK_ROOT 或安装到 \$SDK/ndk），跳过 JNI shim" >&2
+  echo "      已有 payload/native 保持不变；启用原生插件的构建需要 shim。" >&2
+else
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) NDK_HOST="windows-x86_64" ;;
+    Darwin*) NDK_HOST="darwin-x86_64" ;;
+    *) NDK_HOST="linux-x86_64" ;;
+  esac
+  CLANG="$NDK/toolchains/llvm/prebuilt/$NDK_HOST/bin/clang"
+  [ -f "$CLANG" ] || CLANG="$CLANG.exe"
+  if [ ! -f "$CLANG" ]; then
+    echo "警告: 找不到 NDK clang（$NDK/toolchains/llvm/prebuilt/$NDK_HOST），跳过 JNI shim" >&2
+  else
+    SHIM_SRC="$ROOT/shell/jni/berba_jni.c"
+    [ -f "$SHIM_SRC" ] || die "找不到 JNI shim 源码: $SHIM_SRC"
+    echo "==> 编译 JNI shim（arm64-v8a / armeabi-v7a / x86_64）"
+    rm -rf "$OUT/native"
+    for pair in \
+      "arm64-v8a:aarch64-linux-android" \
+      "armeabi-v7a:armv7a-linux-androideabi" \
+      "x86_64:x86_64-linux-android"; do
+      abi="${pair%%:*}"
+      triple="${pair##*:}"
+      mkdir -p "$OUT/native/$abi"
+      "$CLANG" "--target=${triple}24" -shared -fPIC -O2 -fvisibility=hidden \
+        -I "$(hostpath "$ROOT/shell/jni")" -I "$(hostpath "$ROOT/include")" \
+        -Wl,--no-undefined -Wl,-z,max-page-size=16384 -Wl,--build-id=none \
+        "-ffile-prefix-map=$(hostpath "$ROOT")=." \
+        -o "$(hostpath "$OUT/native/$abi/libberba_jni.so")" \
+        "$(hostpath "$SHIM_SRC")" -llog -ldl -lm
+    done
+    ls -l "$OUT"/native/*/libberba_jni.so
+  fi
+fi
+
 echo "==> 完成"
-ls -l "$OUT"/classes*.dex
+ls -l "$OUT"/classes*.dex "$OUT/shell.json"

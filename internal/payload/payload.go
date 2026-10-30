@@ -14,7 +14,11 @@ import (
 	"strings"
 )
 
-const EnvHome = "BERBA_HOME"
+const (
+	EnvHome = "BERBA_HOME"
+	// NativeShimName 是 JNI shim 在 payload/native/<abi>/ 下的固定文件名。
+	NativeShimName = "libberba_jni.so"
+)
 
 type Lib struct {
 	Name string // lib/<abi>/<file>.so
@@ -27,8 +31,34 @@ type Layout struct {
 	Aapt2      string
 	AndroidJar string
 	Versions   string
+	ShellPath  string
+	Shell      *ShellManifest
 	Dexes      []string
 	Libs       []Lib
+	Native     map[string]string // ABI -> payload/native/<abi>/libberba_jni.so
+}
+
+// ShellManifest 是 payload/shell.json 的能力协商清单；缺失时按 core-only 处理。
+type ShellManifest struct {
+	Schema           int      `json:"schema"`
+	Capabilities     []string `json:"capabilities"`
+	NativeABIVersion int      `json:"nativeAbiVersion"`
+}
+
+// Supports 报告当前 payload 是否实现了指定能力。
+func (l *Layout) Supports(name string) bool {
+	if name == "" || name == "core" {
+		return true
+	}
+	if l == nil || l.Shell == nil {
+		return false
+	}
+	for _, cap := range l.Shell.Capabilities {
+		if cap == name {
+			return true
+		}
+	}
+	return false
 }
 
 func ExeDir() (string, error) {
@@ -85,6 +115,21 @@ func LocateOn(override, goos string) (*Layout, error) {
 	})
 	l.Dexes = matches
 
+	l.ShellPath = filepath.Join(payloadDir, "shell.json")
+	if data, err := os.ReadFile(l.ShellPath); err == nil {
+		var shell ShellManifest
+		if err := json.Unmarshal(data, &shell); err != nil {
+			return nil, fmt.Errorf("解析 payload/shell.json 失败: %w", err)
+		}
+		if shell.Schema != 1 {
+			return nil, fmt.Errorf("payload/shell.json 的 schema 不受支持: %d", shell.Schema)
+		}
+		sort.Strings(shell.Capabilities)
+		l.Shell = &shell
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("读取 payload/shell.json 失败: %w", err)
+	}
+
 	libRoot := filepath.Join(payloadDir, "lib")
 	abis, _ := os.ReadDir(libRoot)
 	for _, abi := range abis {
@@ -100,6 +145,22 @@ func LocateOn(override, goos string) (*Layout, error) {
 				Name: path.Join("lib", abi.Name(), f.Name()),
 				Path: filepath.Join(libRoot, abi.Name(), f.Name()),
 			})
+		}
+	}
+
+	nativeRoot := filepath.Join(payloadDir, "native")
+	if abis, err := os.ReadDir(nativeRoot); err == nil {
+		l.Native = map[string]string{}
+		for _, abi := range abis {
+			if !abi.IsDir() {
+				continue
+			}
+			p := filepath.Join(nativeRoot, abi.Name(), NativeShimName)
+			st, err := os.Lstat(p)
+			if err != nil || !st.Mode().IsRegular() {
+				continue
+			}
+			l.Native[abi.Name()] = p
 		}
 	}
 	return l, nil
@@ -139,9 +200,10 @@ type VersionsFile struct {
 	Shell      ShellVersions `json:"shell"`
 }
 
-// ShellVersions 记录 payload/classes*.dex 的哈希（与 Locate 排序一致）。
+// ShellVersions 记录 payload/classes*.dex 与原生 shim 的哈希。
 type ShellVersions struct {
-	DexSha256 []string `json:"dexSha256"`
+	DexSha256    []string          `json:"dexSha256"`
+	NativeSha256 map[string]string `json:"nativeSha256,omitempty"`
 }
 
 type VersionedHash struct {

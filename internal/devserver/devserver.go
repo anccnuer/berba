@@ -33,6 +33,29 @@ type AppMeta struct {
 	VersionCode int
 }
 
+// LuaNativeFunction 描述原生插件函数；Async 表示需要 Lua 回调。
+type LuaNativeFunction struct {
+	Async bool `json:"async"`
+}
+
+// LuaNativeModule 对应 native.<module> 表。
+type LuaNativeModule struct {
+	Functions map[string]LuaNativeFunction `json:"functions"`
+}
+
+// LuaNativePlugin 是 dev 运行时用于安装抛错桩的插件元数据。
+type LuaNativePlugin struct {
+	Name    string                     `json:"name"`
+	LibName string                     `json:"libName"`
+	Modules map[string]LuaNativeModule `json:"modules"`
+}
+
+// LuaNative 是原生能力元数据。
+type LuaNative struct {
+	ABIVersion int               `json:"abiVersion"`
+	Plugins    []LuaNativePlugin `json:"plugins"`
+}
+
 // Options 是开发服务器配置。
 type Options struct {
 	Root   string
@@ -45,6 +68,11 @@ type Options struct {
 	LuaRoot  string
 	LuaEntry string
 	App      AppMeta
+	// LuaCapabilities/Modules/Events/Native 为浏览器 Lua 运行时提供能力元数据。
+	LuaCapabilities []string
+	LuaModules      map[string][]string
+	LuaEvents       map[string][]string
+	LuaNative       *LuaNative
 }
 
 // Server 提供带 shim 注入的静态文件服务。
@@ -61,6 +89,11 @@ type Server struct {
 	luaEntry string
 	luaOn    bool
 	app      AppMeta
+
+	luaCapabilities []string
+	luaModules      map[string][]string
+	luaEvents       map[string][]string
+	luaNative       *LuaNative
 }
 
 // New 校验目录并构建处理器。
@@ -93,6 +126,11 @@ func New(opts Options) (*Server, error) {
 		host:  opts.Host,
 		port:  opts.Port,
 		app:   opts.App,
+
+		luaCapabilities: opts.LuaCapabilities,
+		luaModules:      opts.LuaModules,
+		luaEvents:       opts.LuaEvents,
+		luaNative:       opts.LuaNative,
 	}
 	if opts.LuaRoot != "" {
 		luaRoot, err := filepath.Abs(opts.LuaRoot)
@@ -222,9 +260,13 @@ func (s *Server) serveLuaAsset(data []byte) http.HandlerFunc {
 }
 
 type luaManifest struct {
-	Entry string            `json:"entry"`
-	Files map[string]string `json:"files"`
-	App   luaManifestApp    `json:"app"`
+	Entry        string              `json:"entry"`
+	Files        map[string]string   `json:"files"`
+	App          luaManifestApp      `json:"app"`
+	Capabilities []string            `json:"capabilities"`
+	Modules      map[string][]string `json:"modules"`
+	Events       map[string][]string `json:"events"`
+	Native       *LuaNative          `json:"native,omitempty"`
 }
 
 type luaManifestApp struct {
@@ -281,6 +323,10 @@ func (s *Server) serveLuaManifest(w http.ResponseWriter, r *http.Request) {
 			VersionName: s.app.VersionName,
 			VersionCode: s.app.VersionCode,
 		},
+		Capabilities: s.luaCapabilities,
+		Modules:      s.luaModules,
+		Events:       s.luaEvents,
+		Native:       s.luaNative,
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {

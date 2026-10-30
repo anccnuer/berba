@@ -1,7 +1,13 @@
 package com.berba.shell;
 
+import android.Manifest;
+import android.content.Context;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.os.Build;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
+import android.os.VibratorManager;
 import android.util.DisplayMetrics;
 import android.util.Log;
 
@@ -41,11 +47,11 @@ final class LuaApis {
     private LuaApis() {
     }
 
-    private interface Body {
+    interface Body {
         Varargs call(Varargs args) throws Exception;
     }
 
-    private static LuaValue fn(final Body body) {
+    static LuaValue fn(final Body body) {
         return new VarArgFunction() {
             @Override
             public Varargs invoke(Varargs args) {
@@ -60,7 +66,7 @@ final class LuaApis {
         };
     }
 
-    private static Varargs nilError(Throwable t) {
+    static Varargs nilError(Throwable t) {
         return LuaValue.varargsOf(LuaValue.NIL, LuaValue.valueOf(LuaRuntime.message(t)));
     }
 
@@ -96,14 +102,14 @@ final class LuaApis {
             if (!handler.isfunction()) {
                 throw new LuaError("app.on 第二个参数必须是函数");
             }
-            if (!LuaRuntime.isAppEvent(event)) {
+            if (!rt.isAppEvent(event)) {
                 throw new LuaError("未知事件: " + event);
             }
             rt.addHandler(event, handler);
             return LuaValue.NIL;
         }));
         app.set("exit", fn(args -> {
-            rt.activity().finishOnMain();
+            rt.requireUi().activity().finishOnMain();
             return LuaValue.NIL;
         }));
         app.set("info", fn(args -> {
@@ -115,6 +121,7 @@ final class LuaApis {
             t.set("versionCode", c.versionCode);
             t.set("sdk", Build.VERSION.SDK_INT);
             t.set("platform", "android");
+            t.set("foreground", LuaValue.valueOf(rt.ui() != null));
             return t;
         }));
         g.set("app", app);
@@ -123,23 +130,23 @@ final class LuaApis {
     private static void installWeb(final LuaRuntime rt, Globals g) {
         LuaTable web = new LuaTable();
         web.set("load", fn(args -> {
-            rt.activity().loadFromLua(args.checkjstring(1));
+            rt.requireUi().activity().loadFromLua(args.checkjstring(1));
             return LuaValue.NIL;
         }));
         web.set("reload", fn(args -> {
-            rt.activity().reloadOnMain();
+            rt.requireUi().activity().reloadOnMain();
             return LuaValue.NIL;
         }));
         web.set("goBack", fn(args -> {
-            rt.activity().goBackOnMain();
+            rt.requireUi().activity().goBackOnMain();
             return LuaValue.NIL;
         }));
-        web.set("canGoBack", fn(args -> rt.activity().canGoBackCached()
+        web.set("canGoBack", fn(args -> rt.requireUi().activity().canGoBackCached()
                 ? LuaValue.TRUE : LuaValue.FALSE));
         web.set("eval", fn(args -> {
             String script = args.checkjstring(1);
             final LuaValue callback = args.arg(2);
-            rt.activity().evaluateJs(script, callback.isfunction() ? callback : null);
+            rt.requireUi().activity().evaluateJs(script, callback.isfunction() ? callback : null);
             return LuaValue.NIL;
         }));
         web.set("on", fn(args -> {
@@ -148,7 +155,7 @@ final class LuaApis {
             if (!handler.isfunction()) {
                 throw new LuaError("web.on 第二个参数必须是函数");
             }
-            if (!LuaRuntime.isWebEvent(event)) {
+            if (!rt.isWebEvent(event)) {
                 throw new LuaError("未知事件: " + event);
             }
             rt.addHandler(event, handler);
@@ -233,9 +240,10 @@ final class LuaApis {
         }));
         http.set("cancel", fn(args -> {
             String id = args.checkjstring(1);
+            // 先标记再断开：请求可能尚未注册到 ACTIVE_HTTP，标记可避免取消丢失。
+            CANCELED_HTTP.add(id);
             HttpURLConnection conn = ACTIVE_HTTP.remove(id);
             if (conn != null) {
-                CANCELED_HTTP.add(id);
                 conn.disconnect();
             }
             return conn != null ? LuaValue.TRUE : LuaValue.FALSE;
@@ -471,7 +479,7 @@ final class LuaApis {
         if (s.startsWith("/")) {
             throw new IOException("必须使用相对路径");
         }
-        File root = rt.activity().getFilesDir().getCanonicalFile();
+        File root = rt.context().getFilesDir().getCanonicalFile();
         File f = new File(root, s).getCanonicalFile();
         String rootPath = root.getPath();
         if (!f.getPath().equals(rootPath) && !f.getPath().startsWith(rootPath + File.separator)) {
@@ -608,7 +616,7 @@ final class LuaApis {
         LuaTable store = new LuaTable();
         store.set("get", fn(args -> {
             String key = args.checkjstring(1);
-            String raw = rt.activity().prefs().getString(key, null);
+            String raw = rt.prefs().getString(key, null);
             if (raw == null) {
                 return LuaValue.NIL;
             }
@@ -621,9 +629,9 @@ final class LuaApis {
             }
             LuaValue value = args.arg(2);
             if (value.isnil()) {
-                rt.activity().prefs().edit().remove(key).apply();
+                rt.prefs().edit().remove(key).apply();
             } else {
-                rt.activity().prefs().edit().putString(key, LuaConvert.toJson(value)).apply();
+                rt.prefs().edit().putString(key, LuaConvert.toJson(value)).apply();
             }
             return LuaValue.TRUE;
         }));
@@ -632,12 +640,12 @@ final class LuaApis {
             if (key.length() > 256) {
                 throw new LuaError("store key 不合法");
             }
-            boolean existed = rt.activity().prefs().contains(key);
-            rt.activity().prefs().edit().remove(key).apply();
+            boolean existed = rt.prefs().contains(key);
+            rt.prefs().edit().remove(key).apply();
             return existed ? LuaValue.TRUE : LuaValue.FALSE;
         }));
         store.set("keys", fn(args -> {
-            List<String> keys = new ArrayList<>(rt.activity().prefs().getAll().keySet());
+            List<String> keys = new ArrayList<>(rt.prefs().getAll().keySet());
             Collections.sort(keys);
             LuaTable t = new LuaTable();
             for (int i = 0; i < keys.size(); i++) {
@@ -666,7 +674,8 @@ final class LuaApis {
             if (name.isEmpty()) {
                 throw new LuaError("权限名不能为空");
             }
-            return rt.activity().hasPermission(name) ? LuaValue.TRUE : LuaValue.FALSE;
+            return rt.context().checkSelfPermission(name) == PackageManager.PERMISSION_GRANTED
+                    ? LuaValue.TRUE : LuaValue.FALSE;
         }));
         permission.set("request", fn(args -> {
             LuaValue names = args.arg(1);
@@ -690,7 +699,7 @@ final class LuaApis {
                 throw new LuaError("一次最多请求 32 个权限");
             }
             final LuaValue callback = args.arg(2);
-            rt.activity().requestPermissionsFromLua(list, callback.isfunction() ? callback : null);
+            rt.requireUi().activity().requestPermissionsFromLua(list, callback.isfunction() ? callback : null);
             return LuaValue.NIL;
         }));
         g.set("permission", permission);
@@ -707,32 +716,32 @@ final class LuaApis {
             } else if (duration.isnumber()) {
                 longDuration = duration.toint() >= 2000;
             }
-            rt.activity().toastOnMain(message, longDuration);
+            rt.requireUi().activity().toastOnMain(message, longDuration);
             return LuaValue.NIL;
         }));
         ui.set("statusBar", fn(args -> {
             LuaTable opts = args.checktable(1);
             int color = parseColor(opts.get("color"), Color.TRANSPARENT);
             boolean light = opts.get("light").optboolean(false);
-            rt.activity().setStatusBarOnMain(color, light);
+            rt.requireUi().activity().setStatusBarOnMain(color, light);
             return LuaValue.NIL;
         }));
         ui.set("alert", fn(args -> {
-            rt.activity().showAlert(args.checkjstring(1));
+            rt.requireUi().activity().showAlert(args.checkjstring(1));
             return LuaValue.NIL;
         }));
         ui.set("confirm", fn(args -> {
             String message = args.checkjstring(1);
             final LuaValue callback = args.arg(2);
-            rt.activity().showConfirm(message, callback.isfunction() ? callback : null);
+            rt.requireUi().activity().showConfirm(message, callback.isfunction() ? callback : null);
             return LuaValue.NIL;
         }));
         ui.set("fullscreen", fn(args -> {
-            rt.activity().setFullscreenOnMain(args.checkboolean(1));
+            rt.requireUi().activity().setFullscreenOnMain(args.checkboolean(1));
             return LuaValue.NIL;
         }));
         ui.set("keepScreenOn", fn(args -> {
-            rt.activity().setKeepScreenOnOnMain(args.checkboolean(1));
+            rt.requireUi().activity().setKeepScreenOnOnMain(args.checkboolean(1));
             return LuaValue.NIL;
         }));
         g.set("ui", ui);
@@ -758,21 +767,22 @@ final class LuaApis {
     private static void installDevice(final LuaRuntime rt, Globals g) {
         LuaTable device = new LuaTable();
         device.set("clipboard", fn(args -> {
+            MainActivity activity = rt.requireUi().activity();
             LuaValue value = args.arg(1);
             if (!value.isnil()) {
-                if (!rt.activity().setClipboardTextOnMain(value.tojstring())) {
+                if (!activity.setClipboardTextOnMain(value.tojstring())) {
                     throw new LuaError("写入剪贴板失败");
                 }
                 return LuaValue.TRUE;
             }
-            return LuaValue.valueOf(rt.activity().clipboardText());
+            return LuaValue.valueOf(activity.clipboardText());
         }));
         device.set("vibrate", fn(args -> {
             int ms = args.arg(1).optint(200);
             if (ms < 1 || ms > 10000) {
                 throw new LuaError("vibrate 时长需在 1-10000 毫秒");
             }
-            if (!rt.activity().vibrateOnMain(ms)) {
+            if (!vibrate(rt.context(), ms)) {
                 throw new LuaError("缺少 VIBRATE 权限（在 app.json 的 permissions 中声明）");
             }
             return LuaValue.NIL;
@@ -791,15 +801,15 @@ final class LuaApis {
             if (text.trim().isEmpty() && url.trim().isEmpty()) {
                 throw new LuaError("device.share 需要 text 或 url");
             }
-            rt.activity().shareOnMain(text, url);
+            rt.requireUi().activity().shareOnMain(text, url);
             return LuaValue.NIL;
         }));
         device.set("openUrl", fn(args -> {
-            rt.activity().openUrlOnMain(args.checkjstring(1));
+            rt.requireUi().activity().openUrlOnMain(args.checkjstring(1));
             return LuaValue.NIL;
         }));
         device.set("orientation", fn(args -> {
-            rt.activity().setOrientationOnMain(args.checkjstring(1));
+            rt.requireUi().activity().setOrientationOnMain(args.checkjstring(1));
             return LuaValue.NIL;
         }));
         device.set("model", fn(args -> LuaValue.valueOf(Build.MODEL)));
@@ -807,7 +817,7 @@ final class LuaApis {
         device.set("platform", fn(args -> LuaValue.valueOf("android")));
         device.set("locale", fn(args -> LuaValue.valueOf(Locale.getDefault().toString())));
         device.set("screen", fn(args -> {
-            DisplayMetrics m = rt.activity().getResources().getDisplayMetrics();
+            DisplayMetrics m = rt.context().getResources().getDisplayMetrics();
             LuaTable t = new LuaTable();
             t.set("width", m.widthPixels);
             t.set("height", m.heightPixels);
@@ -816,6 +826,30 @@ final class LuaApis {
             return t;
         }));
         g.set("device", device);
+    }
+
+    private static boolean vibrate(Context context, int ms) {
+        if (context.checkSelfPermission(Manifest.permission.VIBRATE)
+                != PackageManager.PERMISSION_GRANTED) {
+            return false;
+        }
+        Vibrator vibrator;
+        if (Build.VERSION.SDK_INT >= 31) {
+            VibratorManager manager =
+                    (VibratorManager) context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE);
+            vibrator = manager == null ? null : manager.getDefaultVibrator();
+        } else {
+            vibrator = (Vibrator) context.getSystemService(Context.VIBRATOR_SERVICE);
+        }
+        if (vibrator == null || !vibrator.hasVibrator()) {
+            return true;
+        }
+        if (Build.VERSION.SDK_INT >= 26) {
+            vibrator.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE));
+        } else {
+            vibrator.vibrate(ms);
+        }
+        return true;
     }
 
     private static void installJson(final LuaRuntime rt, Globals g) {

@@ -18,13 +18,11 @@ public final class JsBridge {
     private static final String TAG = "berba";
     private static final int MAX_ARGS = 1024 * 1024;
 
-    private final MainActivity activity;
-    private final LuaRuntime lua;
+    private final UiSession session;
     private final String token;
 
-    JsBridge(MainActivity activity, LuaRuntime lua) {
-        this.activity = activity;
-        this.lua = lua;
+    JsBridge(UiSession session) {
+        this.session = session;
         byte[] random = new byte[16];
         new SecureRandom().nextBytes(random);
         this.token = hex(random);
@@ -44,10 +42,15 @@ public final class JsBridge {
         if (reqId == null || name == null) {
             return;
         }
+        if (!session.isCurrent()) {
+            Log.w(TAG, "桥调用来自已失效的界面，已拒绝");
+            return;
+        }
         if (!constantTimeEquals(reqToken, token)) {
             Log.w(TAG, "桥调用 token 不匹配，已拒绝");
             return;
         }
+        MainActivity activity = session.activity();
         // origin 由原生侧按当前文档记录，不信任页面自报。
         String origin = activity.pageOrigin();
         if (!activity.config().originAllowed(origin)) {
@@ -58,11 +61,13 @@ public final class JsBridge {
             reply(reqId, false, "参数过大");
             return;
         }
-        lua.callBridge(name, argsJson, (ok, payload) -> reply(reqId, ok, payload));
+        session.runtime().callBridge(name, argsJson, (ok, payload) -> reply(reqId, ok, payload));
     }
 
     private void reply(String reqId, boolean ok, String payload) {
-        activity.deliverBridgeResult(reqId, ok, payload);
+        if (session.isCurrent()) {
+            session.activity().deliverBridgeResult(reqId, ok, payload);
+        }
     }
 
     private static boolean constantTimeEquals(String a, String b) {

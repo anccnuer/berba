@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "name": "task",
+  "kind": "capability",
+  "summary": "后台定时任务：间隔、每日、延时触发，开机与改时间重排，无界面分发。",
+  "requiresLua": true,
+  "permissions": [
+    "android.permission.RECEIVE_BOOT_COMPLETED",
+    "android.permission.SCHEDULE_EXACT_ALARM"
+  ],
+  "components": ["task_job_service", "task_alarm_receiver", "task_boot_receiver"],
+  "installer": "TaskModule",
+  "modules": {
+    "task": {
+      "browser": "stub",
+      "functions": {
+        "schedule": {"async": false, "foreground": false, "doc": "创建或替换定时任务，返回下一次触发时间与 runId。"},
+        "cancel": {"async": false, "foreground": false, "doc": "取消任务并移除闹钟；返回任务是否存在。"},
+        "list": {"async": false, "foreground": false, "doc": "返回按名称排序的全部任务。"},
+        "exact": {"async": false, "foreground": false, "doc": "当前是否允许使用精确闹钟。"}
+      }
+    }
+  },
+  "events": {
+    "task": {"owner": "app", "foreground": false, "doc": "后台任务触发；调用 ctx.done() 结束本次运行，超时也会结束。"}
+  }
+}

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"testing"
 
 	"berba/internal/aapt2"
@@ -43,6 +44,12 @@ func stage(t *testing.T) (home, docs string) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(docs, "docs", "a.md"), []byte("a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(docs, "include"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(docs, "include", "berba_plugin.h"), []byte("/* abi */"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return home, docs
@@ -91,7 +98,7 @@ func TestPackage(t *testing.T) {
 	for _, f := range zr.File {
 		names[f.Name] = true
 	}
-	for _, want := range []string{"README.md", "docs/a.md", "tools/versions.json", "payload/classes.dex"} {
+	for _, want := range []string{"README.md", "docs/a.md", "include/berba_plugin.h", "tools/versions.json", "payload/classes.dex"} {
 		if !names[want] {
 			t.Errorf("missing %q in %v", want, names)
 		}
@@ -201,6 +208,28 @@ func TestPackageCrossTarget(t *testing.T) {
 	}
 	if vf.Aapt2.Version != "2.19-cross" || vf.Aapt2.Sha256 == "" || len(vf.Shell.DexSha256) != 1 {
 		t.Fatalf("unexpected versions: %+v", vf)
+	}
+}
+
+func TestPackageRequiresNativeShims(t *testing.T) {
+	home, docs := stage(t)
+	writeShell := func(version int) {
+		body := fmt.Sprintf(`{"schema":1,"capabilities":["native"],"nativeAbiVersion":%d}`, version)
+		if err := os.WriteFile(filepath.Join(home, "payload", "shell.json"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeShell(0)
+	if _, err := Package(context.Background(), Options{
+		Home: home, OutDir: t.TempDir(), DocsDir: docs, Version: "0.13", Aapt2Version: "2.19",
+	}); err == nil || !strings.Contains(err.Error(), "nativeAbiVersion") {
+		t.Fatalf("old shell accepted: %v", err)
+	}
+	writeShell(1)
+	if _, err := Package(context.Background(), Options{
+		Home: home, OutDir: t.TempDir(), DocsDir: docs, Version: "0.13", Aapt2Version: "2.19",
+	}); err == nil || !strings.Contains(err.Error(), "payload/native") {
+		t.Fatalf("missing shim accepted: %v", err)
 	}
 }
 

@@ -62,13 +62,20 @@ berba dev --open
 
 dev 运行时基于 fengari（Lua 5.3），设备壳是 LuaJ（Lua 5.2），且浏览器没有 Android 能力：
 
+`berba dev` 会把 `app.json` 解析出的能力元数据写入 `/__berba/lua.json`（`capabilities`、`modules`、`events`、`native`），运行时据此决定安装哪些模块表、允许哪些 `app.on` 事件，与设备读取 `assets/berba_capabilities.json` 的方式同构；元数据缺失（手工构造的旧清单）时才回退为全部可用。
+
 | 能力 | 浏览器行为 |
 | --- | --- |
 | `app.info()` | `platform` 为 `"browser"`、`sdk` 为 `0`，其余取自 `app.json` |
 | `app.on("back")` | 浏览器无法拦截返回键，改为手动调用 `window.__berbaDev.back()`（返回是否已处理） |
 | `app.on("newIntent")` | 不触发 |
 | `pause` / `resume` | 绑定 `visibilitychange` |
-| `permission.*` | 一律视为已授权，仅方便调试 |
+| `app.on("notification")` | 仅当 `capabilities` 含 `notify` 时可注册；浏览器通知点击时触发，页面关闭后不再回调，可用 `window.__berbaDev.notify(id, data)` 手动触发 |
+| `app.on("task")` | 仅当 `capabilities` 含 `task` 时可注册；可以注册处理器（便于复用业务代码），但浏览器不会触发；`task.schedule` 抛“浏览器不支持后台任务”，`list` 返回空、`exact` 返回 `false` |
+| `native.*` | 仅当 `capabilities` 含 `native` 时存在；`native.list()` 返回 `app.json` 声明的插件/模块/函数（`ok=false`），插件函数抛“原生插件仅在设备上可用”；请用 `dev/mock.js` 伪造结果 |
+| 未启用的能力 | `notify` / `task` / `native` 表与其他设备独有模块一样不存在；`/__berba/lua.json` 的 `capabilities`、`modules`、`events`、`native` 决定装载范围，元数据缺失时才回退为全部可用 |
+| `permission.*` | 除 `POST_NOTIFICATIONS` 使用浏览器通知权限外，其余视为已授权 |
+| `notify.*` | 基于 Web Notifications：`channel` 仅校验参数不生效；点击后回到页面并触发事件，`data` 原样返回；无系统通知开关查询。浏览器通常要求在用户手势中申请权限，建议由按钮触发 `permission.request` |
 | `store` / `file` | 落在 `localStorage`，清站点数据即清空；单文件仍限制 8MB |
 | `http.*` | 直连受浏览器 CORS 限制，跨域请求会失败；明文 `http://` 不拦截 |
 | `http.request` 的 `onProgress` | 用 `ReadableStream` 读取，取不到 `Content-Length` 时总长为 `-1` |
@@ -108,9 +115,9 @@ berba watch --install
 
 ## 构建流水线
 
-1. **校验配置**：读取 `app.json`，检查包名、版本、主题、方向、权限、入口文件、图标与 origin。
+1. **校验配置**：读取 `app.json`，检查包名、版本、主题、方向、权限、能力、入口文件、图标与 origin。
 2. **定位工具链**：`tools/aapt2.exe`、`tools/android.jar`、`payload/classes*.dex`。
-3. **渲染资源**：生成 `.berba/build/AndroidManifest.xml`、多密度 `mipmap-*/ic_launcher.png`、`values/strings.xml`。
+3. **渲染资源**：生成 `.berba/build/AndroidManifest.xml`、多密度 `mipmap-*/ic_launcher.png`、`values/strings.xml`；启用 `notify` 时额外生成 `drawable-*/ic_stat_berba.png`，并合并能力声明的权限与 `singleTask`；启用 `task` 时合并 `TaskJobService` 与两个 Receiver，以及开机/改时间/精确闹钟授权变化的 intent-filter。
 4. **aapt2**：
    ```
    aapt2 compile --dir .berba/build/res -o .berba/build/compiled.zip
@@ -180,7 +187,7 @@ berba release --home dist/windows-amd64 --out dist --version 0.1.0 --docs .
 
 打 `v*` tag 即触发完整发布流程（`ci.yml`），无需本地打包：
 
-1. **build**（ubuntu）：编译 shell dex、组装 linux-amd64 发行包；再用 `GOOS=windows` 交叉编译 CLI，下载官方 `build-tools_r35_windows.zip` 并校验 SHA-256 后提取 `aapt2.exe`，以 `--target-os windows --aapt2-version` 交叉组装 windows-amd64 发行包。两个 zip 作为 artifact 上传。
+1. **build**（ubuntu）：安装固定版本 NDK（`26.1.10909125`）编译 shell dex 与三 ABI shim（`llvm-readelf` 断言架构、导出符号、16KB 对齐与依赖白名单），组装 linux-amd64 发行包；再用 `GOOS=windows` 交叉编译 CLI，下载官方 `build-tools_r35_windows.zip` 并校验 SHA-256 后提取 `aapt2.exe`，以 `--target-os windows --aapt2-version` 交叉组装 windows-amd64 发行包。两个 zip 作为 artifact 上传。
 2. **windows-smoke**（windows-latest）：解压上面生成的**真实 Windows 发行包**，运行 `berba.exe doctor`（实际执行 aapt2.exe、逐一比对哈希）并 `init` + `build` 一个示例 APK。
 3. **publish**：仅 tag 触发，前两个作业全绿后 `gh release create`，附带两个平台的 zip 与 `.sha256`。
 
@@ -197,6 +204,8 @@ ANDROID_SDK_ROOT=/path/to/sdk scripts/build-shell.sh payload
 ```
 
 `build-shell.sh` 会自动选择最新的 build-tools；可用 `PLATFORM`、`BUILD_TOOLS`、`LUAJ_JAR`、`OUT`、`WORK` 覆盖。源码在 `shell/app/src/main/java/`，仅依赖 Android 框架、`org.json`（系统内置）与 LuaJ。
+
+检测到 NDK（`ANDROID_NDK_ROOT` / `ANDROID_NDK_HOME` 或 `$SDK/ndk`）时，`build-shell.sh` 与 `build-shell.ps1` 都会额外把 `shell/jni/berba_jni.c` 编译为 `payload/native/<abi>/libberba_jni.so`（`arm64-v8a`、`armeabi-v7a`、`x86_64`），两个脚本的产物逐字节一致。缺少 NDK 时只告警并跳过 shim：普通项目仍可构建，启用原生插件的项目会在 `berba build` 阶段因缺少 shim 失败。发行链路必须有 shim：`scripts/package-dist.*` 会先跑 `build-shell.*`，随后 `berba release` 校验三 ABI shim 齐全且 ELF 合规，缺库时直接失败。CI 与本仓库验证固定使用 NDK r26b（`26.1.10909125`，clang 17），换版本需自行确认 shim 与插件 ELF 仍然合规。详见 [native-plugins.md](native-plugins.md)。
 
 Android SDK 二进制受 SDK 许可约束，**不要提交到 git**；发行 zip 在本地或 CI 组装，并随包附带 `NOTICE`。
 

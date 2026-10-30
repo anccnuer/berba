@@ -29,7 +29,16 @@ jobs:
 
       - uses: android-actions/setup-android@v3
         with:
-          packages: "platforms;android-35 build-tools;35.0.0"
+          packages: "platforms;android-35 build-tools;35.0.0 ndk;26.1.10909125"
+
+      - name: Locate NDK
+        id: ndk
+        run: |
+          set -euo pipefail
+          NDK="$ANDROID_HOME/ndk/26.1.10909125"
+          test -d "$NDK"
+          echo "root=$NDK" | tee -a "$GITHUB_OUTPUT"
+          echo "tools=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin" | tee -a "$GITHUB_OUTPUT"
 
       - name: Go format check
         run: |
@@ -39,6 +48,24 @@ jobs:
         run: |
           go test -race ./...
           go vet ./...
+
+      - name: Generated files up to date
+        run: |
+          go generate ./internal/capability
+          git diff --exit-code
+
+      - name: Java API level guard
+        run: |
+          set -euo pipefail
+          # minSdk 24 禁止 API 26+ 类型（java.time 等）。
+          if grep -RnE '^import java\.time\.|java\.time\.[A-Z]' shell/app/src/main/java; then
+            echo "shell 源码引用了 API 26+ 的 java.time 类型" >&2
+            exit 1
+          fi
+          if grep -RnE '\bAndroidX|androidx\.' shell/app/src/main/java; then
+            echo "shell 源码不应引入 androidx 依赖" >&2
+            exit 1
+          fi
 
       - name: Staticcheck
         run: |
@@ -54,8 +81,45 @@ jobs:
       - name: Build shell payload
         env:
           LUAJ_JAR: ${{ github.workspace }}/.tools/luaj/luaj-jse-3.0.1.jar
+          ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.root }}
         run: |
+          set -euo pipefail
           OUT="$RUNNER_TEMP/dist/payload" bash scripts/build-shell.sh
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            test -f "$RUNNER_TEMP/dist/payload/native/$abi/libberba_jni.so" || {
+              echo "缺少 $abi JNI shim（NDK 未生效）" >&2
+              exit 1
+            }
+          done
+
+      - name: Check JNI shim ELF
+        env:
+          NDK_TOOLS: ${{ steps.ndk.outputs.tools }}
+        run: |
+          set -euo pipefail
+          PAYLOAD="$RUNNER_TEMP/dist/payload/native"
+          for pair in "arm64-v8a:aarch64" "armeabi-v7a:arm" "x86_64:x86[-_]64"; do
+            abi="${pair%%:*}"
+            want="${pair##*:}"
+            so="$PAYLOAD/$abi/libberba_jni.so"
+            "$NDK_TOOLS/llvm-readelf" -h "$so" > /tmp/h.txt
+            grep -qiE "Machine:.*$want" /tmp/h.txt || { echo "$abi 架构不匹配"; cat /tmp/h.txt; exit 1; }
+            "$NDK_TOOLS/llvm-readelf" --dyn-syms "$so" > /tmp/s.txt
+            grep -q "JNI_OnLoad" /tmp/s.txt || { echo "$abi 缺少 JNI_OnLoad"; exit 1; }
+            if grep -E "GLIBCXX|c\+\+_shared" /tmp/s.txt > /dev/null; then
+              echo "$abi shim 不应依赖 C++ STL"; exit 1
+            fi
+            exports="$(awk '$5=="GLOBAL" && $7!="UND" { print $8 }' /tmp/s.txt | sort -u | tr '\n' ' ')"
+            [ "$exports" = "JNI_OnLoad " ] || { echo "$abi shim 导出超出 JNI_OnLoad: $exports"; exit 1; }
+            "$NDK_TOOLS/llvm-readelf" -lW "$so" > /tmp/l.txt
+            awk '$1=="LOAD" { print $NF }' /tmp/l.txt | sort -u > /tmp/a.txt
+            [ -s /tmp/a.txt ] || { echo "$abi 缺少 PT_LOAD"; exit 1; }
+            min=4096
+            [ "$abi" = "armeabi-v7a" ] || min=16384
+            while read -r al; do
+              [ "$((16#${al#0x}))" -ge "$min" ] || { echo "$abi PT_LOAD 对齐 $al 低于 $min"; exit 1; }
+            done < /tmp/a.txt
+          done
 
       - name: Assemble CLI + tools
         env:
@@ -94,6 +158,166 @@ jobs:
           "$RUNNER_TEMP/dist/berba" build "$RUNNER_TEMP/hello" --home "$RUNNER_TEMP/dist" --out "$RUNNER_TEMP/hello/dist2"
           cmp "$RUNNER_TEMP/hello/dist/"*.apk "$RUNNER_TEMP/hello/dist2/"*.apk
 
+      - name: Build capability examples
+        run: |
+          set -euo pipefail
+          BERBA="$RUNNER_TEMP/dist/berba"
+          BT="$(ls -1 "$ANDROID_SDK_ROOT/build-tools" | sort -V | tail -1)"
+          AAPT2="$ANDROID_SDK_ROOT/build-tools/$BT/aapt2"
+          build_example() {
+            name="$1"
+            "$BERBA" build "examples/$name" --home "$RUNNER_TEMP/dist" --out "$RUNNER_TEMP/example-$name"
+            APK="$(ls "$RUNNER_TEMP"/example-"$name"/*.apk | head -1)"
+            "$ANDROID_SDK_ROOT/build-tools/$BT/apksigner" verify --min-sdk-version 24 "$APK"
+            rm -f /tmp/cap-$name.json
+            unzip -p "$APK" assets/berba_capabilities.json > "/tmp/cap-$name.json"
+            "$AAPT2" dump xmltree --file AndroidManifest.xml "$APK" > "/tmp/$name.xml"
+            unzip -Z1 "$APK" > "/tmp/entries-$name.txt"
+            export APK
+          }
+
+          build_example hello
+          grep -qF '"capabilities": [],' /tmp/cap-hello.json
+          if grep -qE '"notify": \{|"task": \{' /tmp/cap-hello.json; then
+            echo "core 示例的能力资产不应包含可选能力模块" >&2
+            head -40 /tmp/cap-hello.json >&2
+            exit 1
+          fi
+          grep -qF '"plugins": []' /tmp/cap-hello.json
+          grep -q "^classes.dex$" /tmp/entries-hello.txt
+          if grep -q "^lib/" /tmp/entries-hello.txt; then
+            echo "非原生示例不应包含 lib/" >&2; exit 1
+          fi
+
+          build_example notify
+          grep -qE '"notify": \{' /tmp/cap-notify.json
+          grep -qF '"plugins": []' /tmp/cap-notify.json
+          grep -q "android.permission.POST_NOTIFICATIONS" /tmp/notify.xml
+          grep -qE 'android:launchMode\([^)]*\)=2' /tmp/notify.xml
+          if grep -q "extractNativeLibs" /tmp/notify.xml; then
+            echo "notify 示例不应设置 extractNativeLibs" >&2; exit 1
+          fi
+          if grep -q "^lib/" /tmp/entries-notify.txt; then
+            echo "非原生示例不应包含 lib/" >&2; exit 1
+          fi
+
+          build_example task
+          grep -qE '"task": \{' /tmp/cap-task.json
+          grep -q "com.berba.shell.TaskJobService" /tmp/task.xml
+          grep -q "android.permission.BIND_JOB_SERVICE" /tmp/task.xml
+          grep -q "android.permission.RECEIVE_BOOT_COMPLETED" /tmp/task.xml
+          grep -q "android.permission.SCHEDULE_EXACT_ALARM" /tmp/task.xml
+
+      - name: Build native example
+        env:
+          ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.root }}
+          NDK_TOOLS: ${{ steps.ndk.outputs.tools }}
+        run: |
+          set -euo pipefail
+          bash examples/native-echo/build.sh
+          BERBA="$RUNNER_TEMP/dist/berba"
+          BT="$(ls -1 "$ANDROID_SDK_ROOT/build-tools" | sort -V | tail -1)"
+          AAPT2="$ANDROID_SDK_ROOT/build-tools/$BT/aapt2"
+
+          "$BERBA" build examples/native-echo --home "$RUNNER_TEMP/dist" --out "$RUNNER_TEMP/example-native"
+          APK="$(ls "$RUNNER_TEMP"/example-native/*.apk | head -1)"
+          "$ANDROID_SDK_ROOT/build-tools/$BT/apksigner" verify --min-sdk-version 24 "$APK"
+          "$ANDROID_SDK_ROOT/build-tools/$BT/zipalign" -c -P 16 -v 4 "$APK"
+          "$AAPT2" dump xmltree --file AndroidManifest.xml "$APK" > /tmp/native.xml
+          grep -qE 'android:extractNativeLibs\([^)]*\)=true' /tmp/native.xml
+
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            unzip -Z1 "$APK" > /tmp/entries.txt
+            grep -qx "lib/$abi/libberba_jni.so" /tmp/entries.txt || { echo "缺少 $abi shim"; exit 1; }
+            grep -qx "lib/$abi/libberba_echo.so" /tmp/entries.txt || { echo "缺少 $abi 插件"; exit 1; }
+          done
+
+          rm -rf /tmp/so && mkdir -p /tmp/so
+          unzip -q -o "$APK" 'lib/*/*.so' -d /tmp/so
+          for pair in "arm64-v8a:aarch64" "armeabi-v7a:arm" "x86_64:x86[-_]64"; do
+            abi="${pair%%:*}"
+            want="${pair##*:}"
+            min=""
+            case "$abi" in
+              armeabi-v7a) min=4096 ;;
+              *) min=16384 ;;
+            esac
+            for so in /tmp/so/lib/$abi/*.so; do
+              name="$(basename "$so")"
+              "$NDK_TOOLS/llvm-readelf" -h "$so" | grep -qiE "Machine:.*$want" || {
+                echo "$abi/$name 架构不匹配"; exit 1; }
+              "$NDK_TOOLS/llvm-readelf" -lW "$so" > /tmp/load.txt
+              awk '$1=="LOAD" { print $NF }' /tmp/load.txt | sort -u > /tmp/aligns.txt
+              [ -s /tmp/aligns.txt ] || { echo "$abi/$name 缺少 PT_LOAD"; exit 1; }
+              while read -r a; do
+                [ "$((16#${a#0x}))" -ge "$min" ] || {
+                  echo "$abi/$name PT_LOAD 对齐 $a 低于 $min"; exit 1; }
+              done < /tmp/aligns.txt
+              "$NDK_TOOLS/llvm-readelf" -d "$so" | grep "Shared library" |
+                grep -vE 'libc\.so|libm\.so|libdl\.so|liblog\.so' && {
+                  echo "$abi/$name 依赖超出白名单"; exit 1; } || true
+            done
+          done
+
+      - name: Reproducible native build
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/dist/berba" build examples/native-echo --home "$RUNNER_TEMP/dist" \
+            --out "$RUNNER_TEMP/example-native2"
+          cmp "$(ls "$RUNNER_TEMP"/example-native/*.apk | head -1)" \
+              "$(ls "$RUNNER_TEMP"/example-native2/*.apk | head -1)"
+
+      - name: Capability negotiation failures
+        run: |
+          set -euo pipefail
+          BERBA="$RUNNER_TEMP/dist/berba"
+          mk() {
+            dir="$1"
+            mkdir -p "$dir/www" "$dir/lua"
+            echo '<html></html>' > "$dir/www/index.html"
+            echo "log('x')" > "$dir/lua/main.lua"
+          }
+          expect_fail() {
+            dir="$1"; shift
+            set +e
+            "$BERBA" build "$dir" --home "$RUNNER_TEMP/dist" > /tmp/fail.log 2>&1
+            code=$?
+            set -e
+            if [ "$code" -eq 0 ]; then
+              cat /tmp/fail.log >&2
+              echo "期望构建失败但成功了" >&2
+              exit 1
+            fi
+          }
+
+          mk "$RUNNER_TEMP/bad-cap"
+          cat > "$RUNNER_TEMP/bad-cap/app.json" <<'JSON'
+          {"name":"坏能力","package":"com.example.badcap","versionName":"1.0.0","versionCode":1,
+           "capabilities":["bogus"],"web":{"dir":"www","startUrl":"https://appassets.androidhost/index.html"},
+           "lua":{"dir":"lua","entry":"main.lua"}}
+          JSON
+          set +e
+          "$BERBA" build "$RUNNER_TEMP/bad-cap" --home "$RUNNER_TEMP/dist" > /tmp/badcap.log 2>&1
+          code=$?
+          set -e
+          [ "$code" -eq 2 ] || { cat /tmp/badcap.log >&2; echo "未知能力应返回退出码 2（实际 $code）" >&2; exit 1; }
+          grep -q "未知能力" /tmp/badcap.log
+
+          mk "$RUNNER_TEMP/no-shim"
+          mkdir -p "$RUNNER_TEMP/no-shim/native/echo"
+          cat > "$RUNNER_TEMP/no-shim/native/echo/spec.json" <<'JSON'
+          {"name":"echo","abiVersion":1,"version":"1.0.0",
+           "modules":{"echo":{"functions":{"call":{}}}}}
+          JSON
+          cat > "$RUNNER_TEMP/no-shim/app.json" <<'JSON'
+          {"name":"缺库插件","package":"com.example.nolib","versionName":"1.0.0","versionCode":1,
+           "capabilities":["native"],"native":{"plugins":[{"name":"echo"}]},
+           "web":{"dir":"www","startUrl":"https://appassets.androidhost/index.html"},
+           "lua":{"dir":"lua","entry":"main.lua"}}
+          JSON
+          expect_fail "$RUNNER_TEMP/no-shim"
+          grep -q "libberba_echo.so" /tmp/fail.log
+
       - name: Package release zip
         env:
           VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '0.0.0-ci' }}
@@ -126,6 +350,10 @@ jobs:
           cp /tmp/btx/aapt2.exe "$WIN/tools/aapt2.exe"
           cp "$DIST/tools/android.jar" "$WIN/tools/android.jar"
           cp "$DIST/payload/classes.dex" "$WIN/payload/classes.dex"
+          cp "$DIST/payload/shell.json" "$WIN/payload/shell.json"
+          cp -r "$DIST/payload/native" "$WIN/payload/native"
+          test -f "$WIN/payload/native/x86_64/libberba_jni.so" || {
+            echo "Windows 发行包缺少 JNI shim" >&2; exit 1; }
           echo "==> 以本机 berba 交叉打包 windows/amd64"
           "$DIST/berba" release --home "$WIN" --out "$RUNNER_TEMP/release" \
             --version "$VERSION" --platform android-35 --docs "$GITHUB_WORKSPACE" \

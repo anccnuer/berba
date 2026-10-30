@@ -2,7 +2,7 @@
 
 ## 信任边界
 
-- **可信**：应用开发者、项目内的 `app.json`、`www/`、`lua/` 与构建机。
+- **可信**：应用开发者、项目内的 `app.json`、`www/`、`lua/`、原生插件源码与共享库、构建机。
 - **不可信**：远程页面及其加载的第三方脚本、网络响应、用户输入。
 - **沙箱目标**：即使页面被注入恶意脚本，也只能使用已授权的桥方法；Lua 代码无法逃逸到任意 Java/文件系统/进程能力。
 
@@ -23,6 +23,17 @@ base, table, string, math, coroutine, bit32
 `require` 只接受模块名，映射到 `assets/lua/<name>.lua` 或 `<name>/init.lua`，不解析 `..` 或绝对路径，运行时不再提供任何把字符串编译为函数的入口。
 
 所有 Lua 回调由运行时统一捕获异常并写 Logcat，单个回调出错不会拖垮应用。当前没有指令数/内存配额；不要执行不受信任的 Lua 代码。
+
+## 原生插件
+
+- 只有 `app.json` 同时声明 `capabilities: ["native"]` 与 `native.plugins` 时才会打包并加载原生库；无插件构建不含任何 `.so`。
+- 插件是**受信任代码**，与壳同进程运行，绕过 Lua 沙箱，可访问应用的全部 Android 权限、文件与网络；不做崩溃隔离，插件崩溃会带崩应用。
+- 构建期校验：`ET_DYN`、ELF 架构与 ABI 匹配、`PT_LOAD` 对齐（64 位 ≥16KB，32 位 ≥4KB）、必需导出符号、`DT_NEEDED` 只允许 `libc.so/libm.so/libdl.so/liblog.so`；C++ 必须静态链接 STL。
+- 插件只从 `nativeLibraryDir` 的绝对路径 `dlopen`，JNI shim 只导出 `JNI_OnLoad`；加载失败不会 `dlclose`，避免卸载运行中的完成线程代码。
+- 参数/结果/配置上限分别为 1MB/8MB/64KB；异步调用并发上限 256、超时 30 秒。超时、迟到或重复的完成会被丢弃。
+- `config` 与插件库一起进入 APK，可被任何人解包读取；**不要写入密钥**。插件 `describe` 与构建元数据不一致只告警，以构建元数据为准。
+- 加载失败的插件会降级为抛错桩，不影响其他插件；错误信息写入 Logcat（tag `berba` / `berba-plugin`）。
+- NDK 只是构建工具：缺少 shim 时启用原生插件的构建直接失败，不会静默降级。
 
 ## 文件与存储
 
@@ -71,6 +82,23 @@ base, table, string, math, coroutine, bit32
 - 构建时只写入 `app.json` 声明的权限，并自动补充 `INTERNET`。
 - 危险权限仍需运行时申请：`permission.check` / `permission.request`。
 - 最小化权限；`SYSTEM_ALERT_WINDOW`、`ACCESS_BACKGROUND_LOCATION` 等敏感权限需要应用商店/系统额外审核或用户手动授权。
+- 启用 `notify` 能力会自动加入 `POST_NOTIFICATIONS`，但 API 33+ 仍由用户在运行时授权；未授权时 `notify.show` 失败而不是静默。
+
+## 通知
+
+- 通知只能由应用自身在运行时显示；没有推送服务。后台唤醒入口仅限 `task` 能力注册的闹钟与 Job 组件。
+- 点击 Intent 是显式组件（`MainActivity`）且 `PendingIntent` 使用 `FLAG_IMMUTABLE`；data URI 带随机 UUID，避免不同通知互相覆盖。
+- 每个安装生成 128 位随机点击 token（`SecureRandom`，存于独立 `SharedPreferences`，不进入 Lua `store`），payload 与 token 都必须匹配且 action 正确，否则丢弃并记日志。
+- payload 上限 64KB，解析前先清空 Intent extras，防止同一 Intent 被重复投递。
+- 通知标题/正文/`data` 由应用自己写入；锁屏可能显示标题与正文，**不要放入密钥或敏感信息**。`data` 只随显式 Intent 返回给本应用，不是加密存储。
+
+## 定时任务
+
+- `task` 能力会注册 `TaskJobService`（`exported="true"` + `android:permission="android.permission.BIND_JOB_SERVICE"`，仅系统 JobScheduler 可绑定）以及 `TaskAlarmReceiver`、`TaskBootReceiver`（均 `exported="false"`）。
+- 任务定义与 `data` 存放在应用私有 `SharedPreferences("berba_tasks")`，不是加密存储；不要放入密钥。触发时只把 `data` 交给本进程的 Lua handler。
+- 闹钟 PendingIntent 使用显式组件与 `berba-task://<name>` data URI；任务名经过校验，空值/非法名无法排程。
+- Event/Job 只调度任务本身，不执行外部代码；任务 handler 仍受 Lua 沙箱白名单约束。
+- force-stop 会由系统取消闹钟；Doze、厂商省电策略与 JobScheduler 配额下触发为 best-effort，不构成安全边界。
 
 ## 签名与分发
 
@@ -85,3 +113,5 @@ base, table, string, math, coroutine, bit32
 - 没有 Lua 指令数/内存限制，死循环会占满 Lua 工作线程。
 - WebView 版本由设备决定，旧设备可能缺少新特性。
 - 未实现证书固定、代理配置、后台服务等高风险/重原生能力。文件选择器走系统 SAF，下载与 `device.openUrl` 交由外部应用处理，均不受 WebView 白名单约束。
+- 原生插件不受 Lua 沙箱约束；只加载自己构建或审计过的库，不要从网络下载 `.so` 后动态替换。
+- 通知只在 Lua 调用 `notify.show` 时显示；`task` 不会自动补发通知。进程被系统回收后，已排程的闹钟仍可在条件允许时唤醒进程执行任务，但通知本身不会自动重建。

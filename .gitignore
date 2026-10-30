@@ -4,6 +4,7 @@ dist/
 /build/
 .berba/
 /payload/
+examples/native-echo/lib/
 *.apk
 *.aab
 *.keystore

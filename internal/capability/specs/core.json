@@ -1,0 +1,122 @@
+{
+  "schema": 1,
+  "name": "core",
+  "kind": "core",
+  "summary": "内置核心 API：配置、WebView、桥接、HTTP、文件、存储、权限、UI、设备与 JSON。",
+  "requiresLua": false,
+  "installer": "LuaApis",
+  "modules": {
+    "app": {
+      "browser": "full",
+      "functions": {
+        "exit": {"async": false, "foreground": true, "doc": "结束当前界面。"},
+        "info": {"async": false, "foreground": false, "doc": "返回应用名称、包名、版本、SDK 与平台信息。"},
+        "on": {"async": false, "foreground": false, "doc": "注册应用生命周期事件处理器。"}
+      }
+    },
+    "bridge": {
+      "browser": "full",
+      "functions": {
+        "emit": {"async": false, "foreground": true, "doc": "向页面推送事件，对应 JS 的 berba.on。"},
+        "register": {"async": false, "foreground": false, "doc": "注册供 JS 调用的方法。"}
+      }
+    },
+    "device": {
+      "browser": "partial",
+      "functions": {
+        "clipboard": {"async": false, "foreground": true, "doc": "读取或写入剪贴板。"},
+        "locale": {"async": false, "foreground": false, "doc": "返回设备语言，例如 zh_CN。"},
+        "model": {"async": false, "foreground": false, "doc": "返回设备型号。"},
+        "openUrl": {"async": false, "foreground": true, "doc": "用外部浏览器或应用打开 http/https 链接。"},
+        "orientation": {"async": false, "foreground": true, "doc": "运行时切换界面方向。"},
+        "platform": {"async": false, "foreground": false, "doc": "返回固定值 android。"},
+        "screen": {"async": false, "foreground": false, "doc": "返回屏幕宽高、密度与 DPI。"},
+        "sdk": {"async": false, "foreground": false, "doc": "返回 API level。"},
+        "share": {"async": false, "foreground": true, "doc": "打开系统分享面板。"},
+        "vibrate": {"async": false, "foreground": false, "doc": "震动指定毫秒数，需要 VIBRATE 权限。"}
+      }
+    },
+    "file": {
+      "browser": "partial",
+      "functions": {
+        "append": {"async": false, "foreground": false, "doc": "追加写入文件，单文件上限 8MB。"},
+        "delete": {"async": false, "foreground": false, "doc": "删除文件或空目录。"},
+        "exists": {"async": false, "foreground": false, "doc": "判断路径是否存在。"},
+        "list": {"async": false, "foreground": false, "doc": "返回排序后的目录项名称。"},
+        "read": {"async": false, "foreground": false, "doc": "读取文本文件，单文件上限 8MB。"},
+        "rename": {"async": false, "foreground": false, "doc": "重命名或覆盖移动文件。"},
+        "stat": {"async": false, "foreground": false, "doc": "返回文件大小、修改时间与类型。"},
+        "write": {"async": false, "foreground": false, "doc": "原子写入文本文件，自动创建父目录。"}
+      }
+    },
+    "http": {
+      "browser": "partial",
+      "functions": {
+        "cancel": {"async": false, "foreground": false, "doc": "取消在途请求。"},
+        "get": {"async": true, "foreground": false, "doc": "发起 GET 请求，结果通过回调返回。"},
+        "post": {"async": true, "foreground": false, "doc": "发起 POST 请求，结果通过回调返回。"},
+        "request": {"async": true, "foreground": false, "doc": "发起完整形态的 HTTP 请求并返回请求 ID。"}
+      }
+    },
+    "json": {
+      "browser": "full",
+      "functions": {
+        "decode": {"async": false, "foreground": false, "doc": "解析 JSON 文本，失败返回 nil 与错误信息。"},
+        "encode": {"async": false, "foreground": false, "doc": "把 Lua 值编码为 JSON 文本。"}
+      }
+    },
+    "permission": {
+      "browser": "partial",
+      "functions": {
+        "check": {"async": false, "foreground": false, "doc": "检查运行时权限是否已授予。"},
+        "request": {"async": true, "foreground": true, "doc": "申请运行时权限，结果通过回调返回。"}
+      }
+    },
+    "store": {
+      "browser": "partial",
+      "functions": {
+        "get": {"async": false, "foreground": false, "doc": "读取键值，值以 JSON 保存。"},
+        "keys": {"async": false, "foreground": false, "doc": "返回排序后的全部 key。"},
+        "remove": {"async": false, "foreground": false, "doc": "删除键并返回原本是否存在。"},
+        "set": {"async": false, "foreground": false, "doc": "写入或删除键值。"}
+      }
+    },
+    "ui": {
+      "browser": "stub",
+      "functions": {
+        "alert": {"async": false, "foreground": true, "doc": "显示单按钮对话框。"},
+        "confirm": {"async": true, "foreground": true, "doc": "显示确认对话框，结果通过回调返回。"},
+        "fullscreen": {"async": false, "foreground": true, "doc": "隐藏或恢复系统栏。"},
+        "keepScreenOn": {"async": false, "foreground": true, "doc": "保持当前窗口屏幕常亮。"},
+        "statusBar": {"async": false, "foreground": true, "doc": "设置状态栏颜色与图标明暗。"},
+        "toast": {"async": false, "foreground": true, "doc": "显示短提示或长提示。"}
+      }
+    },
+    "web": {
+      "browser": "partial",
+      "functions": {
+        "canGoBack": {"async": false, "foreground": true, "doc": "返回 WebView 是否可后退。"},
+        "eval": {"async": true, "foreground": true, "doc": "执行 JS，结果通过可选回调返回。"},
+        "goBack": {"async": false, "foreground": true, "doc": "WebView 后退。"},
+        "load": {"async": false, "foreground": true, "doc": "加载白名单内的页面。"},
+        "on": {"async": false, "foreground": true, "doc": "注册 WebView 页面事件处理器。"},
+        "reload": {"async": false, "foreground": true, "doc": "重新加载当前页面。"}
+      }
+    }
+  },
+  "globals": {
+    "log": {"async": false, "foreground": false, "doc": "输出日志到 Logcat，tag 为 berba。"}
+  },
+  "events": {
+    "back": {"owner": "app", "foreground": true, "doc": "返回键；返回 true 表示已处理。"},
+    "boot": {"owner": "app", "foreground": false, "doc": "进程启动后触发一次；Stage 2 起由进程级运行时支持。"},
+    "create": {"owner": "app", "foreground": true, "doc": "界面创建后触发。"},
+    "destroy": {"owner": "app", "foreground": true, "doc": "界面销毁前触发。"},
+    "error": {"owner": "web", "foreground": true, "doc": "主框架加载失败。"},
+    "newIntent": {"owner": "app", "foreground": true, "doc": "深链唤起。"},
+    "pageFinished": {"owner": "web", "foreground": true, "doc": "主框架加载完成。"},
+    "pageStarted": {"owner": "web", "foreground": true, "doc": "主框架开始加载。"},
+    "pause": {"owner": "app", "foreground": true, "doc": "界面进入后台。"},
+    "resume": {"owner": "app", "foreground": true, "doc": "界面回到前台。"}
+  }
+}

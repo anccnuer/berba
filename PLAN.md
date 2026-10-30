@@ -6,8 +6,8 @@ berba 目前的形态是「固定壳 + 白名单 Lua API + 纯 Go APK 装配」�
 
 - **无通知、无后台执行**：壳里没有 `NotificationManager` / `AlarmManager` / `Service` / `Receiver`；`LuaRuntime` 直接持有 `MainActivity`（`LuaRuntime.java:48-61`），Activity 销毁即 Lua 结束。提醒、同步、定时任务类应用无法实现。
 - **WebView 高级能力未接**：`BridgeChromeClient` 只处理 console/alert/file chooser（`BridgeChromeClient.java:22-59`）；下载只是转交外部浏览器（`MainActivity.java:912-918`）。
-- **无原生扩展通道**：`payload/lib` 只是占位；`luajava` 被沙箱移除，能力上限完全由壳决定。
-- **能力面三处手写、无单一契约**：`LuaApis.java`（11 个模块）、浏览器端 `runtime.js`（1451 行镜像实现）、`docs/lua-api.md` + `templates/init/AGENTS.md` 各自维护；新增能力要改 5+ 处，dev/device 漂移已经存在。
+- **无原生扩展通道**：`payload/` 目前只有 shell 的 `classes.dex`，没有 native 库通道；`luajava` 被沙箱移除，能力上限完全由壳决定。
+- **能力面三处手写、无单一契约**：`LuaApis.java`（10 个模块 + `log` 全局）、浏览器端 `runtime.js`（1451 行镜像实现）、`docs/lua-api.md` + `templates/init/AGENTS.md` 各自维护；新增能力要改 5+ 处，dev/device 漂移已经存在。
 - **Manifest 是硬编码模板**（`internal/manifest/render.go:42-85`），没有组件注册机制；`app.json` 也无法声明能力，只能靠 permissions 间接表达。
 
 用户已确认的方向：
@@ -40,6 +40,19 @@ berba 目前的形态是「固定壳 + 白名单 Lua API + 纯 Go APK 装配」�
 - `getUserMedia` / geolocation / 下载管理系统（属于另一条能力线，后续单独做）。
 - 原生崩溃隔离；插件是受信任的项目自有代码。
 - iOS、AAB、v1/v3 签名、多 Activity。
+- 任务精确执行承诺：`exact` 仅代表闹钟精度，JobScheduler 执行仍为 best-effort。
+- Java 8+ API desugaring：保持 raw `javac` + `d8` 工具链，新增代码禁用 API 26+ 类型。
+
+---
+
+## 跨阶段实现约束
+
+- **Android API 24 兼容**：壳与新增 Java 代码只使用 minSdk 24 可用的 API；禁止 `java.time`、`String.join`、`List.of` 等 API 26+ 类型（raw `javac` + `d8` 不提供 core library desugaring）。日期/时区逻辑使用 `java.util.Calendar`/`TimeZone` 或自实现 civil date。
+- **UI 回调统一带 epoch**：bridge、`permission.request`、file chooser、alert/confirm、权限结果、生命周期 completion 等所有 UI 回调都捕获 `UiSession.epoch()`；UI detach 后的迟到回调直接丢弃。
+- **生命周期语义变更**：`destroy` 只表示界面解绑，`app.exit` 只结束当前界面；后台通知/任务继续。该变更是 breaking change，发布说明与 `docs/lua-api.md`/`AGENTS.md` 必须给出迁移样例，并明确无后台任务时进程仍可能被系统回收。
+- **NDK 可选、发布必需**：本地 `build-shell` 在缺少 NDK 时跳过 shim、仍产出 shell dex 与 `shell.json`；`berba build` 在启用 native 时检查 shim 存在性并报错；`package-dist`/正式 `release` 必须包含 shim。CI 固定 NDK 版本。
+- **C++ 插件使用静态 STL**：首批 `DT_NEEDED` 白名单不含 `libc++_shared.so`；示例与文档要求 `c++_static`/`-static-libstdc++`。若后续支持共享 STL，必须同时分发 `libc++_shared.so` 并扩展白名单。
+- **生成物与文档同源**：`CapabilityRegistry.java`、`shell/shell.json`、`docs/capabilities.md` 由规格生成；`docs/lua-api.md` 与 `AGENTS.md` 至少增加与规格的一致性测试，避免继续手写漂移。
 
 ---
 
@@ -95,7 +108,7 @@ berba 目前的形态是「固定壳 + 白名单 Lua API + 纯 Go APK 装配」�
 - `GenerateJavaRegistry()`：生成 `shell/app/src/main/java/com/berba/shell/CapabilityRegistry.java`。
 - `GenerateShellManifest()`：生成 `shell/shell.json`。
 
-生成文件全部**提交到仓库**，由 `//go:generate go run ./cmd/berbacap ...` 更新；Go 测试重新生成并逐字节比对，CI 用 `git diff --exit-code` 保证不过期。这样 `javac` 在没有 Go 的 IDE 里也能直接编译，且缺少 `NotifyModule` 等实现会直接编译失败。
+生成文件全部**提交到仓库**，由 `//go:generate go run ./cmd/berbacap ...` 更新；Go 测试重新生成并逐字节比对，CI 用 `git diff --exit-code` 保证不过期。这样 `javac` 在没有 Go 的 IDE 里也能直接编译；当规格声明了某个 installer 而实现类缺失时，编译会直接失败。
 
 ### 3. 进程级运行时与 UiSession
 
@@ -110,8 +123,9 @@ berba 目前的形态是「固定壳 + 白名单 Lua API + 纯 Go APK 装配」�
   - `task`：JobService 无界面分发。
 - `UiSession` 用 `WeakReference<MainActivity>`，绝不把 Activity 存进模块；`LuaRuntime.ui()` 可空，`requireUi()` 对前台专属 API 抛出中文错误。
 - 生产环境**不主动 shutdown**；进程死亡是唯一结束。仅保留 `shutdownForTests()`。
+- `destroy`/`app.exit` 语义变化是 breaking change；Stage 2 的发布说明与文档必须给出迁移样例，并明确无后台任务时进程仍可能被系统回收。
 - UI detach 时**不取消 HTTP**；`destroy` 只表示界面解绑。
-- Bridge 回调捕获 `UiSession.epoch()`；页面销毁后的迟到回调直接丢弃，避免回调到已销毁的 WebView。
+- 所有 UI 回调（bridge、`permission.request`、file chooser、alert/confirm、权限结果、生命周期 completion）捕获 `UiSession.epoch()`；页面销毁后的迟到回调直接丢弃，避免回调到已销毁的 WebView/Activity。
 
 API 可用性矩阵：
 
@@ -259,8 +273,12 @@ void berba_plugin_shutdown(void);   /* 可选实现 */
 ## 分阶段实施
 
 > 每个阶段独立可构建、可测试；Stage 1-2 是后续所有能力的前置。
+>
+> 进度：Stage 1 ✅ 已完成 · Stage 2 ✅ 已完成 · Stage 3 ✅ 已完成 · Stage 4 ✅ 已完成 · Stage 5 ✅ 已完成 · Stage 6 ✅ 已完成（设备矩阵待上机）
 
-### Stage 1 — 能力规格与构建契约
+### Stage 1 — 能力规格与构建契约 ✅
+
+已完成（2026-10-30）：规格加载/解析、配置字段、能力协商、Manifest 组件模板、生成器与校验、CI 生成物检查均已落地；`go test ./...` 通过，`examples/hello` 无新增组件。
 
 **目标**：引入规格、配置字段、payload 协商、Manifest 组件模板、生成/校验机制；不新增运行时能力。
 
@@ -271,16 +289,17 @@ void berba_plugin_shutdown(void);   /* 可选实现 */
 - `internal/capability/resolve.go` — 合并内置能力与插件规格；输出权限/组件/资源/事件。
 - `internal/capability/docs.go` / `javagen.go` / `shellgen.go`。
 - `internal/capability/cmd/berbacap/main.go` — `go generate` 入口。
-- `internal/capability/specs/core.json` — 现有 11 个模块的函数、`log` 全局、核心事件（`boot/create/pause/resume/destroy/back/newIntent`、`web.on` 三事件）。
+- `internal/capability/specs/core.json` — 现有 10 个模块 + `log` 全局的函数、核心事件（`boot/create/pause/resume/destroy/back/newIntent`、`web.on` 三事件）。
 - 测试：`spec_test.go`、`resolve_test.go`、`docs_test.go`、`javagen_test.go`、`shellgen_test.go`。
 - `shell/app/src/main/java/com/berba/shell/CapabilityRegistry.java`（生成并提交）。
 - `docs/capabilities.md`（生成并提交）。
 - `shell/shell.json`（生成并提交）。
+- Stage 1 的 `CapabilityRegistry.java` 只引用 core installer；notify/task/native 的 installer 在对应阶段加入 specs 后重新生成，避免引用尚不存在的 Java 类。
 
 修改：
 
 - `internal/config/config.go`：增加 `Capabilities []string`、`Native NativeConfig`；校验名称/重复/目录/`native` 与 plugins 的对应关系；权限合并顺序为「用户权限 → 能力权限（排序）→ INTERNET」。
-- `internal/manifest/render.go`：`Data` 增加 `Components []string`、`ExtractNativeLibs bool`；用 Go 命名模板渲染 service/receiver；`Validate` 改为 `encoding/xml` 解析；权限/组件确定性排序。
+- `internal/manifest/render.go`：`Data` 增加 `Components []string`、`ExtractNativeLibs bool`；用 Go 命名模板渲染 service/receiver；`Validate` 改为 `encoding/xml` 解析；权限/组件确定性排序。`Data.SingleTask` 在深链非空或 notify 启用时为 true，保证通知点击走 `onNewIntent`。
 - `internal/manifest/render_test.go`：组件出现/缺失、XML 合法、确定性。
 - `internal/build/build.go`：`config.Load` 后 `capability.Resolve`；`payload.Locate` 后按 `shell.json` 校验能力；`manifest.Render` 传入 resolved；`collectPayload` 写 `assets/berba_capabilities.json`。
 - `internal/config/assetconfig.go`：不膨胀 `app_config.json`，能力资产独立。
@@ -293,7 +312,9 @@ void berba_plugin_shutdown(void);   /* 可选实现 */
 
 ---
 
-### Stage 2 — 进程级运行时重构
+### Stage 2 — 进程级运行时重构 ✅
+
+已完成（2026-10-30）：`RuntimeManager` / `UiSession` / `CapabilityConfig` 落地，Lua 入口与进程同生命周期，UI 回调按 epoch 丢弃过期结果，`destroy` 仅解绑界面；旧界面/旋转/`app.exit` 行为由构建与手工清单覆盖。
 
 **目标**：运行时无界面可用、全进程单例；现有 UI 行为不回归。
 
@@ -301,7 +322,7 @@ void berba_plugin_shutdown(void);   /* 可选实现 */
 
 - `shell/.../RuntimeManager.java`
 - `shell/.../UiSession.java`
-- `shell/.../CapabilityConfig.java` — 解析 `assets/berba_capabilities.json`；缺失/损坏时 core-only。
+- `shell/.../CapabilityConfig.java` — 解析 `assets/berba_capabilities.json`；缺失/损坏时 core-only 并记 error；若资产声明了壳未知的能力，为其安装抛错桩而不是静默忽略。
 
 修改：
 
@@ -312,7 +333,7 @@ void berba_plugin_shutdown(void);   /* 可选实现 */
   - `context()`；`postUi()` 无界面时丢弃并记日志。
   - `APP_EVENTS` 改为由 `CapabilityConfig` 驱动（core + 已启用能力事件）。
   - 移除生产 `shutdown()`；仅 `shutdownForTests()`；UI detach 不取消 HTTP。
-  - `emitToJs` / bridge 回调按 `UiSession.epoch()` 丢弃过期结果。
+  - `emitToJs`、bridge、permission、file chooser、alert/confirm 等所有 UI 回调按 `UiSession.epoch()` 丢弃过期结果。
 - `LuaApis.java`：
   - 按矩阵替换 `rt.activity()`：`app.exit/web/ui/permission.request/device.clipboard/share/openUrl/orientation` 用 `requireUi()`；`file/store/http/permission.check/device 其余` 用 `context()`。
   - `app.info()` 增加 `foreground`。
@@ -327,11 +348,13 @@ void berba_plugin_shutdown(void);   /* 可选实现 */
 - `JsBridge.java` / `AssetServer.java` / `BridgeChromeClient.java`：改为持有 `UiSession`；页面 origin、桥回调、页面事件均按 session 校验。
 - `LuaRuntime` 自检：安装后核对能力规格函数是否存在。
 
-**退出标准**：现有 `hello` / `led-banner` 在旋转、退后台、`am kill`、深链、`app.exit` 下行为不回归；入口只执行一次；Activity 销毁后 HTTP 不被取消；旋转循环无 Activity 泄漏。
+**退出标准**：现有 `hello` / `led-banner` 在旋转、退后台、`am kill`、深链、`app.exit` 下行为不回归；入口只执行一次；Activity 销毁后 HTTP 不被取消；旋转循环无 Activity 泄漏；`app.exit` 只结束界面、后台任务继续；所有 UI 回调在 detach 后不再执行；旧项目迁移文档更新。
 
 ---
 
-### Stage 3 — notify
+### Stage 3 — notify ✅
+
+已完成（2026-10-30）：能力规格、通知图标生成、`NotifyModule`/`NotifyController`/`NotificationToken`、冷/热启动点击队列、dev Web Notifications 与 `examples/notify` 均已落地；APK 权限/Manifest/图标断言通过。
 
 **目标**：本地通知、通道、权限、点击事件、构建期图标生成。
 
@@ -348,10 +371,11 @@ void berba_plugin_shutdown(void);   /* 可选实现 */
 
 - `string id` → `tag=id, id=0`；`number id` → `tag=null, id=n`；缺省 id 用自增计数；避免字符串 hash 冲突。
 - `notify.enabled()` 同时检查 `NotificationManager.areNotificationsEnabled()` 和 API 33+ 的 `POST_NOTIFICATIONS`。
+- 权限被拒时 `notify.show` 返回 `nil, "通知权限未授予"`；文档给出 `permission.request("POST_NOTIFICATIONS")` 示例。
 - 通道 API 26+；默认通道用应用名初始化；创建后重要性不可改，更新只改名称/描述。
 - 小图标运行时用 `getIdentifier("ic_stat_berba", "drawable", packageName)`，回退系统图标；**shell 代码不引用 `R`**。
-- 点击 Intent 显式指向 `MainActivity`，携带 `payload` + `token` + 唯一 data URI；冷启动读取后**移除 extras**，避免旋转重复触发。
-- 错误的 token / 非本应用 Intent 直接丢弃并记日志。
+- 点击 Intent 显式指向 `MainActivity`，携带 `payload` + `token` + 唯一 data URI；冷启动读取后**移除 extras**，避免旋转重复触发。notify 启用时 Manifest 的 `MainActivity` 使用 `singleTask`（或 PendingIntent 加 `SINGLE_TOP | CLEAR_TOP`），确保热启动走 `onNewIntent`，避免第二个 Activity/WebView。
+- 错误的 token / 非本应用 Intent 直接丢弃并记日志；点击 payload 上限 64KB，超限拒绝并记日志。
 - `RuntimeManager` 增加通知 payload 队列；`create` 完成后投递 `notification` 事件（payload：`{id, data, coldStart}`）。
 - dev 运行时：部分实现 Web Notifications；`notify.channel` no-op；权限拒绝时给出明确警告；点击可触发本地事件。
 
@@ -361,7 +385,9 @@ void berba_plugin_shutdown(void);   /* 可选实现 */
 
 ---
 
-### Stage 4 — task
+### Stage 4 — task ✅
+
+已完成（2026-10-30）：`task` 规格与 Manifest 组件、Task 运行时与三个系统组件、无界面 Job 分发、`ctx.done()`/超时、重启与改时间重排、`TaskScheduleTest`、dev 桩、`examples/task` 与文档均已落地；APK 组件/权限/能力资产与双构建复现验证通过。
 
 **目标**：定时任务、开机重排、精确闹钟降级、无界面分发、显式完成 + 超时。
 
@@ -400,28 +426,32 @@ end)
 - `TaskJobService.onStartJob` 返回 `true`；只有 `ctx.done()` 或超时才 `jobFinished`；**禁止 handler 返回即完成**（异步 HTTP/native 回调会被杀掉）。
 - `onStopJob` 返回 `false`，标记取消；下一次闹钟已存在。
 - `every` 最小 900 秒（`setAndAllowWhileIdle` 速率限制）；`timeout` 10-600 秒（JobScheduler 上限 10 分钟）。
-- 默认 `setAndAllowWhileIdle`；`exact=true` 时若 `canScheduleExactAlarms()` 为真用精确闹钟，否则降级并记警告；捕获 `SecurityException`。
+- 默认 `setAndAllowWhileIdle`；`exact=true` 时若 `canScheduleExactAlarms()` 为真用精确闹钟，否则降级并记警告；捕获 `SecurityException`。**`exact` 只影响闹钟精度，不保证 Job 开始时间**；JobScheduler 仍是 best-effort，API 31+ 在配额允许时用 `setExpedited(true)` 降低延迟，并在文档中区分 `scheduledAt/firedAt/startedAt/late`。
+- `TaskSchedule` 不得使用 `java.time`（API 26+）；使用 `java.util.Calendar`/`TimeZone` 或自实现 civil date，保证 minSdk 24 可运行。
 - 持久化在独立 `SharedPreferences("berba_tasks")`，JSON 版本化，`commit()` 写入；上限 64 个任务、单任务 data 64KB。
+- PendingIntent 使用 `data` URI `berba-task://<name>` 并配合稳定 requestCode，避免任务名哈希碰撞；取消时按 name 重建。
 - 每个任务持久化 `runId` 与 `jobId`；过期/被替换的 Job 检查 `runId` 后直接跳过。
 - Boot Receiver 处理 `BOOT_COMPLETED`、`MY_PACKAGE_REPLACED`、`TIME_SET`、`TIMEZONE_CHANGED`、精确闹钟权限变化；过期任务立即补一次并标记 `late`，不重放积压。
 - `TaskJobService` 必须 `exported="true"` + `android:permission="android.permission.BIND_JOB_SERVICE"`；两个 Receiver `exported="false"`。
 - 无 `task` handler 时记日志并正常结束；handler 抛错立即 complete 并记日志；重复 `done` 安全。
 - 文档明确：force-stop 后闹钟取消、Doze/OEM 下为 best-effort、无前台服务。
 
-修改：`internal/manifest/render.go`（组件模板）、`CapabilityRegistry.java`、`LuaRuntime.java`/`RuntimeManager.java`（`dispatchTask`）、`internal/devserver/.../runtime.js`（`task` 桩：允许注册 handler，schedule 抛「浏览器不支持后台任务」）、`scripts/build-shell.*`（编译并运行**全部** `*Test.java`；PowerShell 当前只跑了部分）、`docs/*`。
+修改：`internal/manifest/render.go`（组件模板）、`CapabilityRegistry.java`、`LuaRuntime.java`/`RuntimeManager.java`（`dispatchTask`）、`internal/devserver/.../runtime.js`（`task` 桩：允许注册 handler，schedule 抛「浏览器不支持后台任务」）、`scripts/build-shell.*`（编译并运行**全部** `*Test.java`；PowerShell 当前只编译运行 `LuaSandboxTest`，未运行 `NetworkPolicyTest`）、`docs/*`。
 
-**退出标准**：`TaskScheduleTest` 覆盖 interval/daily/DST/错过/溢出；`ctx.done`、超时、双 done、取消中断均正确；重启/改时间重排；精确闹钟关闭时降级；APK 组件属性正确。
+**退出标准**：`TaskScheduleTest` 覆盖 interval/daily/DST/错过/溢出；`ctx.done`、超时、双 done、取消中断均正确；重启/改时间重排；精确闹钟关闭时降级；API 24/25 可运行（无 `java.time`）；`exact` 的闹钟精度与执行 best-effort 语义写入文档；APK 组件属性正确。
 
 ---
 
-### Stage 5 — 原生插件
+### Stage 5 — 原生插件 ✅
+
+已完成（2026-10-30）：`internal/nativeplugin`（spec/ELF/resolve）、JNI shim、`NativePluginBridge`/`NativePluginLoader`/`NativeModule`、能力资产与 APK 库打包（Store + 16KB 对齐）、`include/berba_plugin.h`、`examples/native-echo`、`docs/native-plugins.md`、dev 桩与脚本 NDK 检测均已落地；`go test -race ./...` 通过，合成 ELF fixture 验证 shim/插件入库、对齐、签名、能力资产与双构建复现；真实 NDK（r26b / 26.1.10909125）下的 shim 编译、ELF 断言、native 示例打包与复现已在 Stage 6 本机补跑通过，三 ABI 设备运行仍需上机。`build-shell` 缺 NDK 时跳过 shim 并警告，`berba build` 在 native 启用而 shim 缺失时明确失败。
 
 **目标**：纯 C/C++/Rust 插件加载、稳定 ABI、构建期校验、示例插件。
 
 新增：
 
 - `internal/nativeplugin/spec.go` — 插件 `spec.json` 解析/校验、名称/模块/函数冲突检查。
-- `internal/nativeplugin/elf.go` — `debug/elf` 校验：`ET_DYN`、ELF class/machine 与 ABI 匹配、`PT_LOAD` 对齐（64 位 ≥16KB，32 位 ≥4KB）、必需导出符号、`DT_NEEDED` 白名单（`libc.so/libm.so/libdl.so/liblog.so`）、大小上限。
+- `internal/nativeplugin/elf.go` — `debug/elf` 校验：`ET_DYN`、ELF class/machine 与 ABI 匹配、`PT_LOAD` 对齐（64 位 ≥16KB，32 位 ≥4KB）、必需导出符号、`DT_NEEDED` 白名单（`libc.so/libm.so/libdl.so/liblog.so`；首批不含 `libc++_shared.so`）、大小上限。
 - `internal/nativeplugin/resolve.go` — 插件目录、ABI 交集、运行时元数据。
 - `shell/jni/berba_plugin.h`、`shell/jni/berba_jni.c` — JNI shim（`JNI_OnLoad` + `RegisterNatives`，`dlopen/dlsym`，异步线程 attach/detach，UTF-8 byte[]）。
 - `shell/.../NativePluginBridge.java`、`NativePluginLoader.java`、`NativeModule.java`。
@@ -432,7 +462,9 @@ end)
 关键细节：
 
 - shim 打包在 `payload/native/<abi>/libberba_jni.so`，**不放进 `payload/lib`**，避免所有 APK 都被动带上 ABI。
-- 构建仅当启用 native 插件时，把 shim 与插件库加入 APK：`lib/<abi>/libberba_jni.so`、`lib/<abi>/libberba_<name>.so`；ABI 取所有插件**交集**；交集为空报错；缺 arm64-v8a 警告。
+- 构建仅当启用 native 插件时，把 shim 与插件库加入 APK：`lib/<abi>/libberba_jni.so`、`lib/<abi>/libberba_<name>.so`；ABI 取所有插件**交集**；交集为空报错；缺 arm64-v8a 警告。启用 native 但 `payload/native` 缺少对应 shim 时，`berba build` 必须在工具链阶段失败。
+- 本地 `build-shell` 缺少 NDK 时跳过 shim 并警告，仍生成 shell dex 与 `shell.json`；`package-dist`/正式 `release` 必须构建并校验 shim，CI 固定 NDK 版本。
+- C++ 插件必须使用静态 STL（`c++_static`/`-static-libstdc++`）；若链接 `libc++_shared.so`，构建期 ELF 校验会拒绝，需改用静态链接或后续扩展白名单与分发。示例插件优先用 C。
 - 有插件时 Manifest 设置 `android:extractNativeLibs="true"`；插件库在 `nativeLibraryDir` 下由 shim `dlopen` 绝对路径。
 - shim 只导出 `JNI_OnLoad`；插件 ABI 函数用 `__attribute__((visibility("default")))`。
 - 编译参数：`-shared -fPIC -O2 -fvisibility=hidden -Wl,--no-undefined -Wl,-z,max-page-size=16384 -Wl,--build-id=none -ffile-prefix-map=<src>=.`。
@@ -447,18 +479,22 @@ end)
 
 修改：`internal/config/config.go`（插件字段校验）、`internal/build/build.go`（ABI 交集、插件库、`extractNativeLibs`、能力资产）、`internal/payload/payload.go`（扫描 `payload/native`）、`CapabilityRegistry.java`、`LuaRuntime.java`（启动时加载插件）、`scripts/package-dist.*`、`docs/security.md`。
 
-**退出标准**：无插件构建不含 shim；有插件构建含 shim + 插件库；`zipalign -c -P 16 -v 4`、ELF 对齐、`apksigner verify` 通过；arm64/armv7/x86_64 加载正常；同步/异步/跨线程完成/超时/init 失败路径正确；双构建可复现。
+**退出标准**：无插件构建不含 shim；有插件构建含 shim + 插件库；无 NDK 时 shell 构建可跳过 shim（非 native 项目可用），native 构建在 shim 缺失时明确失败；`zipalign -c -P 16 -v 4`、ELF 对齐、`apksigner verify` 通过；arm64/armv7/x86_64 加载正常；同步/异步/跨线程完成/超时/init 失败路径正确；双构建可复现。
 
 ---
 
-### Stage 6 — 文档、示例、CI 与手动验收
+### Stage 6 — 文档、示例、CI 与手动验收 ✅（设备矩阵待上机）
 
-- `runtime.js` 完整接入能力元数据：启用/禁用桩、`notify` 部分实现、`task`/`native` 桩、事件白名单、函数存在性自检。
-- `devserver` 的 `lua.json` 增加 `capabilities/modules/events/native`；`berba dev` 不要求完整 payload。
-- 更新 `README`、`docs/config.md`、`docs/lua-api.md`、`docs/build.md`、`docs/security.md`、`docs/testing.md`、`templates/init/AGENTS.md`、`templates/init/app.json`（可选示例字段）。
-- 三个示例加入 CI：`examples/notify`、`examples/task`、`examples/native-echo`。
-- CI 增加：NDK 构建、能力协商失败用例、APK 组件/权限断言、原生 ELF 检查、生成文件无 diff、双构建可复现、Windows smoke（使用 Linux 产物）。
-- 完成设备矩阵手动验收（见下）。
+已完成（2026-10-30）：浏览器 dev 运行时按 `lua.json` 的能力元数据安装模块与事件白名单，未启用能力不装表、声明但未实现的能力装抛错桩，`native.list()` 返回 `app.json` 元数据且插件函数抛「原生插件仅在设备上可用」；`internal/cli/dev.go` 复用设备侧同一套解析结果生成元数据（未知能力、缺失 `spec.json` 直接失败）。文档、模板与 `docs/migration.md` 迁移样例落地，新增 `internal/capability/docsync_test.go` 做规格↔文档一致性检查。CI 固定 NDK 构建三 ABI shim 并断言 ELF（架构/仅导出 `JNI_OnLoad`/无 C++ STL/PT_LOAD 对齐/依赖白名单），构建 `examples/{hello,notify,task,native-echo}` 并断言能力资产、Manifest 权限/组件/`singleTask`/`extractNativeLibs`、`zipalign -c -P 16`、`apksigner verify`、双构建复现、能力协商失败用例、`java.time`/androidx 守卫；Windows 交叉发行包携带 `payload/native`。ci.yml 已通过 YAML 解析与逐步骤 `bash -n`；本机装上 NDK r26b（26.1.10909125）后，所有依赖 NDK 的步骤也已模拟通过：三 ABI shim 编译（仅导出 `JNI_OnLoad`、`PT_LOAD` 对齐 0x4000、依赖仅 libc/libm/libdl/liblog）并被 Go 的 ELF 校验接受、native 示例的 `zipalign -c -P 16 -v 4` + `apksigner verify` + `extractNativeLibs=true` + 六库打包、native 双构建字节一致、有 shim 的发行目录下无插件构建仍不含 `lib/`、缺 shim 时在「定位工具链」阶段 fail-fast（退出 3）、共享 STL 的 C++ 插件被拒而 `-static-libstdc++` 通过、`doctor` 列出三 shim 与 ABI 1、`release` 含 shim/头文件与 `versions.json` 的 `nativeSha256`、Windows 交叉步骤中 build-tools 与 `aapt2.exe` 的 SHA256 常量与官方产物核对一致。设备手动矩阵仍需真机/模拟器。
+
+- ✅ `runtime.js` 完整接入能力元数据：启用/禁用桩、`notify` 部分实现、`task`/`native` 桩、事件白名单、函数存在性自检。
+- ✅ `devserver` 的 `lua.json` 增加 `capabilities/modules/events/native`；`berba dev` 不要求完整 payload。
+- ✅ 更新 `README`、`docs/config.md`、`docs/lua-api.md`、`docs/build.md`、`docs/security.md`、`docs/testing.md`、`templates/init/AGENTS.md`、`templates/init/app.json`（可选示例字段）。
+- ✅ `docs/lua-api.md` 与 `templates/init/AGENTS.md` 增加与规格的一致性测试（或由 `capabilities.md` 生成 API 表）；发布说明给出 `destroy`/`app.exit` 迁移样例（`docs/migration.md`）。
+- ✅ 三个示例加入 CI：`examples/notify`、`examples/task`、`examples/native-echo`。
+- ✅ CI 增加：NDK 构建、能力协商失败用例、APK 组件/权限断言、原生 ELF 检查、生成文件无 diff、双构建可复现、Windows smoke（使用 Linux 产物）。
+- ✅ 文档与 `templates/init/AGENTS.md` 校准：固定 NDK 版本与编译参数写入 `docs/build.md`/`docs/native-plugins.md`/`README`，`AGENTS.md` 新增 `native` 章节（限制、抛错桩、清单第 10 项）与 `native.plugins` 字段行，模板内文档引用改为可点击的上游链接。
+- ⏳ 完成设备矩阵手动验收（见下）。
 
 ---
 
@@ -481,6 +517,7 @@ end)
 - 保留 `LuaSandboxTest`、`NetworkPolicyTest`。
 - 新增 `TaskScheduleTest`：interval、daily、DST 前后、错过、溢出、禁用。
 - 新增纯 Java 校验器测试（任务名/插件名、LuaConvert 转义），避免依赖 `org.json` 的 Android 实现。
+- 增加 Java API 兼容性检查：CI 禁止 `java.time` 等 API 26+ 类型出现在 shell 源码；`TaskScheduleTest` 在 JVM 上覆盖 Date/TimeZone 逻辑。
 - 修复 `build-shell.ps1` 只编译部分测试的问题，两个脚本都编译运行全部 `*Test.java`。
 
 ### CI 断言
@@ -488,9 +525,10 @@ end)
 ```text
 gofmt -l . ; go vet ./... ; staticcheck ./... ; go test -race ./...
 go generate ./internal/capability && git diff --exit-code
+! grep -R "java\.time" shell/app/src/main/java   # minSdk 24 禁止 API 26+ 类型
 scripts/build-shell.sh              # 含 NDK shim
 berba build examples/hello examples/notify examples/task examples/native-echo
-aapt2 dump xmltree                  # 权限/组件/extractNativeLibs 断言
+aapt2 dump xmltree                  # 权限/组件/singleTask/extractNativeLibs 断言
 unzip -l                            # 能力资产/插件库/shim 出现时机
 zipalign -c -P 16 -v 4
 apksigner verify
@@ -513,13 +551,19 @@ llvm-readelf -lW                    # LOAD 对齐 0x4000（64 位）
 | 风险 | 缓解 |
 | --- | --- |
 | `MainActivity`/`LuaApis` 重构回归 | Stage 2 先于任何新能力、行为保持；生命周期回归矩阵；Activity 引用审计（只允许 `UiSession` 弱引用）。 |
+| UI 回调在 detach 后到达 | 所有 UiSession 回调统一 epoch guard；页面/Activity 销毁后丢弃。 |
+| minSdk 24 与 API 26+ 类型（`java.time` 等） | CI grep 禁止；TaskSchedule 使用 Calendar/TimeZone；API 24/25 手测。 |
 | Job 在异步 Lua 工作完成前被结束 | 强制 `ctx.done()` + 超时；禁止 handler 返回即完成；测试覆盖异步 HTTP。 |
 | 后台在 OEM/Doze 下不可靠 | 明确定位 best-effort；`every` ≥900s；boot/时间变化重排；文档写清 force-stop 行为。 |
 | Android 14 精确闹钟默认拒绝 | `canScheduleExactAlarms()` 检查 + 非精确降级 + 权限变化重排 + `task.exact()`。 |
+| 通知点击创建重复 Activity/WebView | notify 启用时 singleTask + PendingIntent flags + onNewIntent 测试。 |
+| `exact` 被误解为精确执行 | 文档区分闹钟精度与 Job best-effort；API 31+ setExpedited；设备矩阵验证。 |
 | 原生插件崩溃导致应用退出 | 受信任模型 + ELF/ABI 校验 + 示例 + 文档；崩溃隔离明确不做。 |
 | CLI/payload 版本漂移 | `payload/shell.json` 协商，工具链阶段失败；`doctor` 打印能力；release 绑定 dex/shell.json。 |
 | 规格与实现漂移 | 生成 Java 注册表/文档/`shell.json` 并测试；运行时函数存在性自检；CI diff 检查。 |
 | NDK 破坏可复现构建 | 固定 NDK 版本、固定 flags、`--build-id=none`、`-ffile-prefix-map`、双构建比对。 |
+| NDK 成为所有构建者的硬依赖 | 本地可选、发布必需；CI 固定版本；缺 shim 时 native 构建 fail-fast。 |
+| C++ 插件被 `DT_NEEDED` 白名单拒绝 | 静态 STL 规范 + 示例用 C + 文档说明。 |
 | 通知 Intent 伪造 | 每安装随机 token + 常量时间比较 + 显式组件 + 冷启动消费 extras。 |
 | dev 通过但设备失败 | 能力支持矩阵；`task`/`native` 在 dev 明确抛错；notify 仅部分模拟；保留上机清单。 |
 | 进程级运行时内存/状态常驻 | 文档明确；无生产 shutdown；OS 回收；`destroy` 语义变更公告。 |
