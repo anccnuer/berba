@@ -277,3 +277,55 @@ func TestRuntimeJSONNativePlugins(t *testing.T) {
 		t.Fatal("clearing plugins must reset extractNativeLibs")
 	}
 }
+
+func TestResolveWidgetCapability(t *testing.T) {
+	reg, err := LoadBuiltin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := reg.Resolve(Request{Capabilities: []string{"widget", "task"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Capabilities) != 2 || res.Capabilities[0] != "task" || res.Capabilities[1] != "widget" {
+		t.Fatalf("capabilities = %v", res.Capabilities)
+	}
+	if !res.Has("widget") || res.Has("notify") {
+		t.Fatalf("Has(widget) = %v, Has(notify) = %v", res.Has("widget"), res.Has("notify"))
+	}
+	// 组件与资源去重后必须有序（task 与 widget 共享前缀，widget_provider 在 task_* 之后）。
+	wantComponents := []string{"task_alarm_receiver", "task_boot_receiver", "task_job_service", "widget_provider"}
+	if strings.Join(res.Components, ",") != strings.Join(wantComponents, ",") {
+		t.Fatalf("components = %v", res.Components)
+	}
+	wantResources := []string{
+		"widget_drawable", "widget_info", "widget_layout", "widget_preview",
+	}
+	if strings.Join(res.Resources, ",") != strings.Join(wantResources, ",") {
+		t.Fatalf("resources = %v", res.Resources)
+	}
+	if len(res.Installers) != 3 || res.Installers[2] != "WidgetModule" {
+		t.Fatalf("installers = %v", res.Installers)
+	}
+	var widgetModule *ResolvedModule
+	for i := range res.Modules {
+		if res.Modules[i].Name == "widget" {
+			widgetModule = &res.Modules[i]
+		}
+	}
+	if widgetModule == nil {
+		t.Fatal("missing widget module")
+	}
+	if len(widgetModule.Functions) != 3 || widgetModule.Browser != "stub" {
+		t.Fatalf("widget module = %+v", widgetModule)
+	}
+	var widgetEvent *ResolvedEvent
+	for i := range res.Events {
+		if res.Events[i].Name == "widget" {
+			widgetEvent = &res.Events[i]
+		}
+	}
+	if widgetEvent == nil || widgetEvent.Owner != "app" || widgetEvent.Foreground {
+		t.Fatalf("widget event = %+v", widgetEvent)
+	}
+}

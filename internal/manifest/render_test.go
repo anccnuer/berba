@@ -189,6 +189,49 @@ func TestValidateRejectsMalformedXML(t *testing.T) {
 	}
 }
 
+func TestRenderWidgetCapability(t *testing.T) {
+	p := testProject()
+	res := &capability.Resolved{
+		Capabilities: []string{"widget"},
+		Components:   []string{"widget_provider"},
+	}
+	data, err := RenderResolved(p, false, res)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Validate(data); err != nil {
+		t.Fatal(err)
+	}
+	out := string(data)
+	for _, want := range []string{
+		`android:name="com.berba.shell.WidgetProvider"`,
+		`android:exported="false"`,
+		`android:name="android.appwidget.action.APPWIDGET_UPDATE"`,
+		`android:name="android.appwidget.provider"`,
+		`android:resource="@xml/berba_widget_info"`,
+		`android:launchMode="singleTask"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("manifest missing %s\n%s", want, out)
+		}
+	}
+
+	// 未启用 widget 时不应出现任何小组件组件或资源。
+	plain, err := RenderResolved(p, false, &capability.Resolved{Capabilities: []string{"task"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(plain)
+	for _, unwanted := range []string{"WidgetProvider", "appwidget", "berba_widget"} {
+		if strings.Contains(text, unwanted) {
+			t.Fatalf("未启用 widget 时不应出现 %q:\n%s", unwanted, text)
+		}
+	}
+	if strings.Contains(text, "launchMode=\"singleTask\"") {
+		t.Fatalf("仅启用 task 时不应开启 singleTask:\n%s", text)
+	}
+}
+
 func TestThemeValues(t *testing.T) {
 	cases := map[string]string{
 		"light":  "@android:style/Theme.Material.Light.NoActionBar",

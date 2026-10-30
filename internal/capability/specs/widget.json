@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "name": "widget",
+  "kind": "capability",
+  "summary": "桌面小组件：卡片式数据展示，进程被回收后仍显示缓存。",
+  "requiresLua": true,
+  "components": ["widget_provider"],
+  "resources": ["widget_layout", "widget_info", "widget_drawable", "widget_preview"],
+  "installer": "WidgetModule",
+  "modules": {
+    "widget": {
+      "browser": "stub",
+      "functions": {
+        "update": {"async": false, "foreground": false, "doc": "写入缓存并渲染卡片；无实例时只缓存。"},
+        "clear": {"async": false, "foreground": false, "doc": "清空缓存并把小组件显示为占位。"},
+        "list": {"async": false, "foreground": false, "doc": "返回已放置的实例 id 与缓存时间。"}
+      }
+    }
+  },
+  "events": {
+    "widget": {"owner": "app", "foreground": false, "doc": "点击小组件；冷启动在 create 之后触发。"}
+  }
+}

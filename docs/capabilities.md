@@ -227,3 +227,36 @@ Manifest 组件：
 | --- | --- | --- | --- |
 | `task` | `app` | 否 | 后台任务触发；调用 ctx.done() 结束本次运行，超时也会结束。 |
 
+## widget（capability）
+
+桌面小组件：卡片式数据展示，进程被回收后仍显示缓存。
+
+需要 Lua 运行时：是
+
+Manifest 组件：
+
+- `widget_provider`
+
+生成资源：
+
+- `widget_drawable`
+- `widget_info`
+- `widget_layout`
+- `widget_preview`
+
+### `widget`
+
+浏览器实现：`stub`
+
+| 函数 | 异步 | 前台 | 说明 |
+| --- | --- | --- | --- |
+| `widget.clear` | 否 | 否 | 清空缓存并把小组件显示为占位。 |
+| `widget.list` | 否 | 否 | 返回已放置的实例 id 与缓存时间。 |
+| `widget.update` | 否 | 否 | 写入缓存并渲染卡片；无实例时只缓存。 |
+
+### 事件
+
+| 事件 | 归属 | 前台 | 说明 |
+| --- | --- | --- | --- |
+| `widget` | `app` | 否 | 点击小组件；冷启动在 create 之后触发。 |
+

@@ -40,7 +40,7 @@
 | `orientation` | string | `auto` | `auto` / `portrait` / `landscape` |
 | `theme` | string | `light` | `light` / `dark` / `device`，映射到 Android 框架主题 |
 | `cleartext` | bool | `false` | 是否允许明文 HTTP（不推荐） |
-| `capabilities` | string[] | `[]` | 显式启用的能力，当前支持 `notify`、`task`、`native`；`core` 始终启用，最多 32 个 |
+| `capabilities` | string[] | `[]` | 显式启用的能力，当前支持 `notify`、`task`、`native`、`widget`；`core` 始终启用，最多 32 个 |
 | `permissions` | string[] | `[]` | 权限别名或完整 `android.permission.X`；`INTERNET` 会自动追加 |
 | `metaData` | object | `{}` | 写入 `<application>` 的 `<meta-data>`，键值均为字符串 |
 | `deepLinks` | string[] | `[]` | 自定义 scheme 深链，如 `"myapp://open"`；生成 VIEW intent-filter 并启用 `launchMode="singleTask"` |
@@ -119,8 +119,9 @@
 | `notify` | 本地通知：自动加入 `POST_NOTIFICATIONS`、生成 `drawable-*/ic_stat_berba.png` 小图标，并让 Activity 使用 `launchMode="singleTask"` |
 | `task` | 后台定时任务：自动加入 `RECEIVE_BOOT_COMPLETED`、`SCHEDULE_EXACT_ALARM`，注册 `TaskJobService`、`TaskAlarmReceiver`、`TaskBootReceiver`；需要 `lua` 目录 |
 | `native` | 原生插件：加载 `native.plugins` 声明的 C ABI 共享库，设置 `extractNativeLibs="true"`；需要 `lua` 目录 |
+| `widget` | 桌面小组件：注册 `WidgetProvider`，生成 `res/layout/berba_widget.xml`、`res/xml/berba_widget_info.xml`、圆角 drawable 与各密度预览图，并让 Activity 使用 `launchMode="singleTask"`；需要 `lua` 目录 |
 
-能力名必须匹配 `^[a-z][a-z0-9_]{0,31}$`，重复项自动去重；`core` 无需也无法写入。未实现的能力名会导致构建失败。能力会自动合并 Manifest 权限、组件与资源，无需在 `permissions` 中重复声明这些权限。完整 API 见 [lua-api.md](lua-api.md#notify) 与自动生成的 [capabilities.md](capabilities.md)。`notify`、`task` 与 `native` 都要求 Lua 运行时。
+能力名必须匹配 `^[a-z][a-z0-9_]{0,31}$`，重复项自动去重；`core` 无需也无法写入。未实现的能力名会导致构建失败。能力会自动合并 Manifest 权限、组件与资源，无需在 `permissions` 中重复声明这些权限。完整 API 见 [lua-api.md](lua-api.md#notify) 与自动生成的 [capabilities.md](capabilities.md)。`notify`、`task`、`native` 与 `widget` 都要求 Lua 运行时。
 
 ## 原生插件
 
@@ -162,7 +163,7 @@
 
 - 每条链接解析出 `scheme` 与 `host`，按 `scheme+host` 生成 `<intent-filter>`（VIEW + DEFAULT + BROWSABLE）；`host` 为空时匹配该 scheme 的全部链接。
 - scheme 必须以小写字母开头（仅小写字母、数字、`+ . -`），禁止 `http/https/file/content/data`；重复条目自动去重，最多 16 条。
-- 声明深链后 Activity 自动使用 `launchMode="singleTask"`，保证第二次唤起走 `onNewIntent`（启用 `notify` 能力同样会开启该模式）。
+- 声明深链后 Activity 自动使用 `launchMode="singleTask"`，保证第二次唤起走 `onNewIntent`（启用 `notify` 或 `widget` 能力同样会开启该模式）。
 - Lua 侧通过 `app.on("newIntent", fn)` 收到完整 URL 字符串（冷启动时会在 `create` 之后补发）。深链内容不可信，务必校验后再使用。
 
 ## 启动页面与 origin

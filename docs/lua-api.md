@@ -326,10 +326,71 @@ end)
 task.cancel("sync")
 ```
 
+## widget
+
+需要 `app.json` 的 `capabilities` 包含 `"widget"`（通常与 `"task"` 一起使用）。启用后构建会自动写入 `WidgetProvider` 组件、`res/layout/berba_widget.xml`、`res/xml/berba_widget_info.xml`、圆角 drawable 与各密度预览图；`widget.*` 不要求前台界面。
+
+| 方法 | 说明 |
+| --- | --- |
+| `widget.update(opts)` | 写入缓存并渲染桌面卡片；成功返回 `{ updatedAt, ids }`，失败返回 `nil, err` |
+| `widget.clear()` | 清空缓存，小组件显示为占位（无数据状态） |
+| `widget.list()` | 返回已放置实例的 `{ id, updatedAt }` 数组；无实例时为空表 |
+
+`widget.update` 选项：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `title` | string | 卡片标题，≤ 24 字符（超出截断补 `…`） |
+| `cards` | table | 卡片数组，最多 20 张；渲染固定 5 行，多余的截断并记日志 |
+| `cards[i].title` | string | 小标题，≤ 24 字符 |
+| `cards[i].value` | string | 主数值，≤ 16 字符 |
+| `cards[i].subtitle` | string | 副标题，≤ 32 字符 |
+| `cards[i].color` | string | `value` 文字颜色，`#RRGGBB` 或 `#AARRGGBB`；非法时忽略并回退主题色 |
+
+序列化后的缓存上限 32KB，超过时 `update` 返回 `nil, "小组件状态超过 32KB 上限"`。
+
+`widget.list()` 元素与返回结构：
+
+```lua
+local res, err = widget.update({
+  title = "今日概览",
+  cards = {
+    { title = "天气", value = "26°", subtitle = "多云" },
+    { title = "步数", value = "8,421", subtitle = "目标 10,000", color = "#3DDC84" },
+  },
+})
+-- res = { updatedAt = 1761800000000, ids = { 12, 15 } }
+
+widget.list()   -- { { id = 12, updatedAt = 1761800000000 }, ... }
+widget.clear()
+```
+
+点击小组件会打开 `MainActivity` 并触发 `app.on("widget")`，事件字段为 `id`（小组件实例 id）与 `coldStart`（冷启动为 `true`）。热启动立即送达；冷启动在 `create` 之后送达。每次点击只送达一次，`berba-widget://` 之外的 intent 会被忽略。
+
+刷新与限制（v1）：
+
+- `updatePeriodMillis = 0`：系统不会周期性唤醒应用。需要定时刷新时用 `task`（`every` ≥ 900 秒），在 `app.on("task")` 里调用 `widget.update`；文档不承诺秒级刷新，Doze 与厂商省电策略下可能延迟。
+- 进程被回收、launcher 重启、应用更新后，`WidgetProvider.onUpdate` 只读 `SharedPreferences` 缓存渲染，**不启动 Lua**，因此最后一次内容仍会显示。
+- RemoteViews 只能使用框架控件与固定槽位：v1 不支持图片/图表、可滚动列表、`android:configure` 配置页与 Android 12 响应式尺寸档位；卡片只做文本 + 颜色。
+- 构建期固定的资源名统一为 `berba_widget*` 前缀，自定义 `www/` 或 `lua/` 不要使用该前缀。
+
+```lua
+app.on("create", function() widget.update({ title = "示例", cards = {} }) end)
+
+app.on("task", function(ctx)
+  -- 用 http/file/store 取数后刷新
+  widget.update({ title = "今日概览", cards = collect() })
+  ctx.done()
+end)
+
+app.on("widget", function(event)
+  log("widget clicked", event.id, tostring(event.coldStart))
+end)
+```
+
 ## native
 
 需要 `capabilities` 包含 `"native"`，并在 `app.json` 的 `native.plugins` 中声明插件。每个插件按 `spec.json` 暴露 `native.<module>.<function>`；未声明的模块/函数不可见。插件在应用启动时加载，失败时对应函数替换为抛错桩，其他插件继续可用。
-
 | 方法 | 说明 |
 | --- | --- |
 | `native.list()` | 返回已加载插件数组；元素含 `name`、`lib`、`ok`、`error`（失败时）与 `modules`（函数及 `async` 标记） |

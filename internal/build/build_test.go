@@ -552,6 +552,106 @@ func TestBuildExitCodes(t *testing.T) {
 	})
 }
 
+func TestBuildWidgetCapability(t *testing.T) {
+	root, home := setupProject(t)
+	if err := os.MkdirAll(filepath.Join(root, "lua"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "lua", "main.lua"), []byte("log('hi')"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "payload", "shell.json"),
+		[]byte(`{"schema":1,"capabilities":["widget","task"],"nativeAbiVersion":0}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"name":"小组件示例","package":"com.example.test","versionName":"1.0.0","versionCode":7,
+	  "capabilities":["widget","task"],
+	  "web":{"dir":"www","startUrl":"https://appassets.androidhost/index.html"}}`
+	if err := os.WriteFile(filepath.Join(root, "app.json"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := Build(context.Background(), Options{
+		ConfigPath: filepath.Join(root, "app.json"),
+		Home:       home,
+		OutDir:     filepath.Join(root, "dist"),
+		Runner:     &fakeRunner{packageName: "com.example.test", versionCode: "7"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	manifest, err := os.ReadFile(filepath.Join(root, ".berba", "build", "AndroidManifest.xml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`android:name="com.berba.shell.WidgetProvider"`,
+		`android:name="android.appwidget.action.APPWIDGET_UPDATE"`,
+		`android:name="android.appwidget.provider"`,
+		`android:resource="@xml/berba_widget_info"`,
+		`android:launchMode="singleTask"`,
+	} {
+		if !bytes.Contains(manifest, []byte(want)) {
+			t.Fatalf("manifest missing %q:\n%s", want, manifest)
+		}
+	}
+
+	resDir := filepath.Join(root, ".berba", "build", "res")
+	for _, rel := range []string{
+		"layout/berba_widget.xml",
+		"xml/berba_widget_info.xml",
+		"drawable/berba_widget_bg.xml",
+		"drawable/berba_widget_card.xml",
+		"drawable-xxhdpi/berba_widget_preview.png",
+	} {
+		if _, err := os.Stat(filepath.Join(resDir, filepath.FromSlash(rel))); err != nil {
+			t.Fatalf("%s: %v", rel, err)
+		}
+	}
+
+	data, err := os.ReadFile(res.APKPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var asset struct {
+		Capabilities []string `json:"capabilities"`
+		Modules      map[string]struct {
+			Functions map[string]json.RawMessage `json:"functions"`
+		} `json:"modules"`
+		Events map[string]map[string]json.RawMessage `json:"events"`
+	}
+	for _, f := range zr.File {
+		if f.Name != "assets/berba_capabilities.json" {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = json.NewDecoder(rc).Decode(&asset)
+		rc.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(asset.Capabilities) != 2 || asset.Capabilities[0] != "task" || asset.Capabilities[1] != "widget" {
+		t.Fatalf("capabilities = %v", asset.Capabilities)
+	}
+	for _, fn := range []string{"update", "clear", "list"} {
+		if _, ok := asset.Modules["widget"].Functions[fn]; !ok {
+			t.Fatalf("widget functions = %v", asset.Modules["widget"].Functions)
+		}
+	}
+	if _, ok := asset.Events["app"]["widget"]; !ok {
+		t.Fatalf("app events = %v", asset.Events["app"])
+	}
+}
+
 type failRunner struct{}
 
 func (failRunner) Compile(context.Context, string, string) error {

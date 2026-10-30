@@ -50,6 +50,7 @@ AGENTS.md         本文件
 - 运行时权限申请；Toast/对话框；沉浸式全屏；屏幕常亮；运行时切换屏幕方向；状态栏颜色；读写剪贴板；震动；系统分享；外部浏览器打开 http(s) 链接。
 - 本地通知（`capabilities: ["notify"]`）：通道、显示/取消、点击事件；系统通知权限仍需运行时申请。
 - 后台定时任务（`capabilities: ["task"]`）：一次性/周期/每日任务，闹钟 + JobScheduler 触发 `app.on("task")`，重启与改时间后自动重排；无前台界面时仍可运行（best-effort）。
+- 桌面小组件（`capabilities: ["widget"]`）：卡片式数据展示，`widget.update`/`widget.clear`/`widget.list` 与 `app.on("widget")`；构建期生成 `WidgetProvider`、布局与元数据，缓存写入 `SharedPreferences`，进程被回收后仍显示最后一次内容。v1 只做文本 + 颜色，无配置页、无可滚动列表，定时刷新靠 `task`（见 6.16）。
 - 原生插件（`capabilities: ["native"]` + `native.plugins`）：C ABI v1 共享库暴露 `native.<module>.<function>`，支持同步与跨线程异步；构建期校验 ELF 架构/16KB 对齐/导出符号/依赖白名单。库要先用 NDK 编译到 `<dir>/lib/<abi>/libberba_<name>.so`，多个插件取 ABI 交集，交集为空即构建失败。插件是受信任代码，绕过 Lua 沙箱；C++ 需静态链接 STL（ABI 细节见上游 [`docs/native-plugins.md`](https://github.com/anccnuer/berba/blob/main/docs/native-plugins.md)，用法见 6.15）。
 - 私有文件读写/追加/重命名/删除/stat，键值存储（含 `store.keys`）；读取设备信息。
 - 配置应用名、包名、版本、图标、主题（light/dark/device）、屏幕方向、cleartext、meta-data、能力（`capabilities`）。
@@ -81,7 +82,7 @@ AGENTS.md         本文件
   "orientation": "auto",
   "theme": "light",
   "cleartext": false,
-  "capabilities": ["notify", "task"],
+  "capabilities": ["notify", "task", "widget"],
   "permissions": ["CAMERA"],
   "metaData": { "com.example.channel": "internal" },
   "web": {
@@ -107,7 +108,7 @@ AGENTS.md         本文件
 | `theme` | `light` / `dark` / `device` |
 | `cleartext` | 是否允许明文 HTTP，默认 `false` |
 | `http.allowPrivateNetwork` | 允许 Lua `http` 访问本机/局域网，默认 `false` |
-| `capabilities` | 显式启用的能力，当前支持 `notify`、`task`、`native`；`core` 始终启用 |
+| `capabilities` | 显式启用的能力，当前支持 `notify`、`task`、`native`、`widget`；`core` 始终启用 |
 | `native.plugins` | 原生插件数组 `{ name, dir, config }`；`dir` 默认 `native/<name>` 且必须在项目目录内，库固定为 `<dir>/lib/<abi>/libberba_<name>.so`，`name` 需与插件 `spec.json` 一致 |
 | `permissions` | 权限别名或完整 `android.permission.X`；`INTERNET` 自动追加 |
 | `metaData` | `<application>` 下的 meta-data，键值均为字符串 |
@@ -146,9 +147,9 @@ window.berba.off('tick', onTick);
 
 ## 6. Lua API
 
-全局白名单：`app`、`web`、`bridge`、`http`、`file`、`store`、`permission`、`notify`（需能力）、`task`（需能力）、`native`（需能力）、`ui`、`device`、`json`、`log`、`require`。设备上所有回调在单一 Lua 工作线程执行（dev 浏览器为事件循环）；`ui`/`web`/`app.exit`/`device.orientation` 内部自动切主线程。
+全局白名单：`app`、`web`、`bridge`、`http`、`file`、`store`、`permission`、`notify`（需能力）、`task`（需能力）、`widget`（需能力）、`native`（需能力）、`ui`、`device`、`json`、`log`、`require`。设备上所有回调在单一 Lua 工作线程执行（dev 浏览器为事件循环）；`ui`/`web`/`app.exit`/`device.orientation` 内部自动切主线程。
 
-运行时是进程级单例：入口每个进程只执行一次，Activity 旋转/重建不会重跑。没有前台界面时，`ui`/`web`/`app.exit`/`device.clipboard`/`device.share`/`device.openUrl`/`device.orientation`/`permission.request` 会报“当前没有前台界面”；`file`/`store`/`http`/`permission.check`/`notify.*`/`task.*` 仍可用。Activity 销毁不会取消在途 HTTP。
+运行时是进程级单例：入口每个进程只执行一次，Activity 旋转/重建不会重跑。没有前台界面时，`ui`/`web`/`app.exit`/`device.clipboard`/`device.share`/`device.openUrl`/`device.orientation`/`permission.request` 会报“当前没有前台界面”；`file`/`store`/`http`/`permission.check`/`notify.*`/`task.*`/`widget.*` 仍可用。Activity 销毁不会取消在途 HTTP。
 
 ### 6.1 入口与 require
 
@@ -158,7 +159,7 @@ window.berba.off('tick', onTick);
 
 | API | 说明 |
 | --- | --- |
-| `app.on(event, fn)` | `boot` / `create` / `pause` / `resume` / `destroy` / `back` / `newIntent` / `notification` / `task`；同事件多个处理器按注册顺序执行 |
+| `app.on(event, fn)` | `boot` / `create` / `pause` / `resume` / `destroy` / `back` / `newIntent` / `notification` / `task` / `widget`；同事件多个处理器按注册顺序执行 |
 | `app.exit()` | 结束当前界面；Lua 运行时与后台任务继续存活 |
 | `app.info()` | 返回 `{name, package, versionName, versionCode, sdk, platform, foreground}` |
 
@@ -169,6 +170,7 @@ window.berba.off('tick', onTick);
 - `newIntent(url)`：深链唤起（需在 `app.json` 配置 `deepLinks`）。冷启动时在 `create` 之后补发。内容不可信，使用前必须校验。
 - `notification(event)`：用户点击本地通知（需 `notify` 能力）。`event = { id, data, coldStart }`；`coldStart` 表示进程此前没有绑定过界面，冷启动在 `create` 之后送达。
 - `task(ctx)`：定时任务触发（需 `task` 能力），可能没有前台界面。`ctx = { name, data, scheduledAt, firedAt, late, runId, done }`，单位均为秒；**必须调用 `ctx.done()`**（异步完成时在回调里调用），否则到达 `timeout` 才结束。详见 6.12。
+- `widget(event)`：点击桌面小组件（需 `widget` 能力）。`event = { id, coldStart }`；`id` 是小组件实例 id，`coldStart` 表示进程此前没有绑定过界面，冷启动在 `create` 之后送达。每次点击只送达一次。详见 6.16。
 
 ```lua
 app.on("back", function()
@@ -349,13 +351,15 @@ JSON 转换：键为 `1..n` 连续整数的表编码为数组，否则为对象�
 
 | 能力 | 浏览器行为 |
 | --- | --- |
-| 能力开关 | 模块与事件白名单来自 `app.json` 的 `capabilities`：未声明 `notify`/`task`/`native` 时对应的表不存在，`app.on("notification")`/`app.on("task")` 报未知事件（与设备一致） |
+| 能力开关 | 模块与事件白名单来自 `app.json` 的 `capabilities`：未声明 `notify`/`task`/`native`/`widget` 时对应的表不存在，`app.on("notification")`/`app.on("task")`/`app.on("widget")` 报未知事件（与设备一致） |
 | `app.info()` | `platform = "browser"`、`sdk = 0`，其余来自 `app.json` |
 | `app.on("back")` | 浏览器拦不到返回键，用 `window.__berbaDev.back()` 手动触发 |
 | `app.on("newIntent")` | 不触发 |
 | `app.on("notification")` | 需 `notify` 能力；浏览器通知点击时触发；页面关闭后不再回调，可用 `window.__berbaDev.notify(id, data)` 手动触发 |
 | `app.on("task")` | 需 `task` 能力；可以注册，但浏览器不会自动触发；需在设备上验证 |
 | `task.*` | `schedule` 直接报「浏览器不支持后台任务」；`cancel` 返回 `false`；`list` 为空数组；`exact` 为 `false` |
+| `app.on("widget")` | 需 `widget` 能力；可以注册，但浏览器没有桌面小组件，不会自动触发；需在设备上验证 |
+| `widget.*` | `update`/`clear`/`list` 都是桩：打印「浏览器无桌面小组件」并返回模拟时间戳/空表，不会静默成功；`dev/mock.js` 中可伪造结果 |
 | `native.*` | `native.list()` 返回 `app.json` 声明的插件/模块/函数（`ok = false`），插件函数抛「原生插件仅在设备上可用」；用 `dev/mock.js` 伪造结果 |
 | `pause` / `resume` | 绑定页面 `visibilitychange` |
 | `permission.*` | 除 `POST_NOTIFICATIONS` 使用浏览器权限外，其余视为已授权 |
@@ -394,8 +398,31 @@ end)
 - 插件是受信任的原生代码，与壳同进程、拥有应用全部权限；它返回的数据在 Lua/页面侧仍要校验与转义。
 - 设备上的 `log` 走 Logcat（tag `berba`），插件内通过宿主 `log` 写入（tag `berba-plugin`）。
 
-## 7. 关键约定与陷阱
+### 6.16 widget（需 `capabilities: ["widget"]`）
 
+桌面卡片式小组件：构建期生成 `WidgetProvider`、`res/layout/berba_widget.xml`、`res/xml/berba_widget_info.xml` 与 `berba_widget*` drawable/预览图，缓存写入 `SharedPreferences("berba_widget")`。
+
+| API | 说明 |
+| --- | --- |
+| `widget.update(opts)` | 写入缓存并渲染；返回 `{ updatedAt, ids }`，失败返回 `nil, err` |
+| `widget.clear()` | 清空缓存，小组件显示占位 |
+| `widget.list()` | 已放置实例 `{ id, updatedAt }` 数组；无实例为空表 |
+
+`opts`：`title`（≤ 24 字符）；`cards`（数组，最多 20 张，渲染固定 5 行，多余的截断并记日志）；每张卡片 `title`（≤ 24）、`value`（≤ 16）、`subtitle`（≤ 32）、`color`（`#RRGGBB`/`#AARRGGBB`，非法时忽略）。缓存序列化上限 32KB。
+
+- `widget.update` 在没有小组件实例时只写缓存并返回 `ids = {}`，不报错。
+- 刷新：`updatePeriodMillis = 0`，系统不会周期唤醒；定时刷新用 `task`（`every` ≥ 900 秒）在 `app.on("task")` 里调用 `widget.update`。
+- 进程被回收、launcher 重启后 `onUpdate` 只读缓存渲染，不启动 Lua。
+- v1 限制：RemoteViews 只支持框架控件 + 固定槽位，不做图片/图表、可滚动列表、`android:configure` 配置页与响应式尺寸档位。
+- 点击触发 `app.on("widget")`，`event = { id, coldStart }`；`berba-widget://` 之外的 intent 被忽略。
+
+```lua
+app.on("create", function() widget.update({ title = "今日概览", cards = {} }) end)
+app.on("task", function(ctx) widget.update({ title = "今日概览", cards = collect() }); ctx.done() end)
+app.on("widget", function(event) log("widget", event.id, tostring(event.coldStart)) end)
+```
+
+## 7. 关键约定与陷阱
 1. **数组判定**：Lua 表只有键恰好为 `1..n` 连续整数时才编码为 JSON 数组；空表编码为 `{}`。需要空数组时用 `json.encode` 前自行构造或返回对象。
 2. **异步模型**：Lua 单线程，没有 `sleep`/定时器；用 `http` 回调或 JS 侧 `setTimeout` + `berba.call` 实现延时。桥调用是异步的，不要假设顺序。
 3. **回调错误**：Lua 回调抛错只会 reject 对应 Promise 或写日志，不会崩溃应用；需要自行 `pcall` 兜底。

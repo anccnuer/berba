@@ -142,7 +142,8 @@ func RenderResolved(p *config.Project, debug bool, res *capability.Resolved) ([]
 			Host:   html.EscapeString(link.Host),
 		})
 	}
-	data.SingleTask = len(data.DeepLinks) > 0 || (res != nil && res.Has("notify"))
+	data.SingleTask = len(data.DeepLinks) > 0 ||
+		(res != nil && (res.Has("notify") || res.Has("widget")))
 
 	tmpl, err := template.New("manifest").Parse(manifestTemplate)
 	if err != nil {
@@ -187,6 +188,12 @@ var componentTemplates = map[string]string{
 		`<action android:name="android.intent.action.TIMEZONE_CHANGED"/>` +
 		`<action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED"/>` +
 		`</intent-filter></receiver>`,
+	"widget_provider": `<receiver android:name="com.berba.shell.WidgetProvider" android:exported="false">` +
+		`<intent-filter>` +
+		`<action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>` +
+		`</intent-filter>` +
+		`<meta-data android:name="android.appwidget.provider" android:resource="@xml/berba_widget_info"/>` +
+		`</receiver>`,
 }
 
 func ThemeValue(theme string) string {
