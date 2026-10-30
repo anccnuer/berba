@@ -21,8 +21,10 @@ final class RuntimeManager {
     private final AppConfig config;
     private final CapabilityConfig capabilities;
     private final NotifyController notify;
+    private final WidgetController widget;
     private final LuaRuntime runtime;
     private final List<NotifyController.Click> pendingClicks = new ArrayList<>();
+    private final List<WidgetController.Click> pendingWidgets = new ArrayList<>();
     private volatile UiSession current;
     private volatile boolean attachedOnce;
 
@@ -32,7 +34,9 @@ final class RuntimeManager {
         this.capabilities = CapabilityConfig.load(appContext);
         this.notify = capabilities.hasCapability("notify")
                 ? new NotifyController(appContext) : null;
-        this.runtime = new LuaRuntime(appContext, config, capabilities, notify);
+        this.widget = capabilities.hasCapability("widget")
+                ? new WidgetController(appContext) : null;
+        this.runtime = new LuaRuntime(appContext, config, capabilities, notify, widget);
         runtime.start();
     }
 
@@ -120,6 +124,45 @@ final class RuntimeManager {
                 event.set("data", data);
                 event.set("coldStart", LuaValue.valueOf(click.coldStart));
                 rt.dispatchEvent("notification", new LuaValue[]{event});
+            }
+        });
+    }
+
+    /** 解析小组件点击 Intent 并排队；返回是否为有效点击。 */
+    boolean captureWidget(Intent intent) {
+        if (widget == null) {
+            return false;
+        }
+        WidgetController.Click click = WidgetController.parseClick(intent);
+        if (click == null) {
+            return false;
+        }
+        click.coldStart = !attachedOnce;
+        synchronized (pendingWidgets) {
+            pendingWidgets.add(click);
+        }
+        return true;
+    }
+
+    /** 在 Lua 就绪后把排队的小组件点击投递为 widget 事件。 */
+    void deliverWidgets(LuaRuntime rt) {
+        if (rt == null) {
+            return;
+        }
+        List<WidgetController.Click> clicks;
+        synchronized (pendingWidgets) {
+            if (pendingWidgets.isEmpty()) {
+                return;
+            }
+            clicks = new ArrayList<>(pendingWidgets);
+            pendingWidgets.clear();
+        }
+        rt.whenReady(() -> {
+            for (WidgetController.Click click : clicks) {
+                LuaTable event = new LuaTable();
+                event.set("id", LuaValue.valueOf(click.widgetId));
+                event.set("coldStart", LuaValue.valueOf(click.coldStart));
+                rt.dispatchEvent("widget", new LuaValue[]{event});
             }
         });
     }

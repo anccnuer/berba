@@ -15,6 +15,48 @@ v0.20 已发布（tag `v0.20`，CI 全绿）。已完成的能力与契约：
 
 ---
 
+## 进度（2026-10-30 收工）
+
+> 工作区有未提交改动；下次从这个清单继续。代码已能编译并通过现有测试，但示例、专项测试与 CI 断言还没做。
+
+| 项 | 状态 |
+| --- | --- |
+| 7.1 规格 / Manifest / 资源 | ✅ 已实现 |
+| 7.2 壳 Provider + 渲染 | ✅ 已实现，`build-shell` 通过（javac + JVM 测试 + d8） |
+| 7.3 缓存渲染与点击事件 | ✅ 已实现 |
+| 7.4 dev 桩与文档 | 🟡 dev 桩、`docs/lua-api.md`、`docs/config.md`、`templates/init/AGENTS.md` 已改；`examples/widget`、`README.md` 未改 |
+| 7.5 测试与 CI | 🔴 未做：`internal/resources/widget_test.go`、`WidgetStateTest.java`、CI 断言 |
+| 设备矩阵 | 🔴 未上机（含新增 widget 项） |
+
+已完成的具体改动：
+
+- 新增 `internal/capability/specs/widget.json`；`spec.go` 白名单加入 `widget_provider` 与 3 个资源名。
+- `internal/manifest/render.go` 增加 `widget_provider` receiver 模板（含 `android.appwidget.provider` meta-data）。
+- 新增 `internal/resources/widget.go`：`berba_widget.xml`（固定 5 行槽位）、`berba_widget_info.xml`、两个 shape drawable。
+- `internal/build/build.go` 接入 `widget_layout` / `widget_info` / `widget_drawable` 资源分支。
+- 重新生成了 `CapabilityRegistry.java`、`shell/shell.json`、`docs/capabilities.md`（未提交）。
+- 新增 `WidgetState.java`（纯 Java、自带极简 JSON、截断与颜色校验）、`WidgetController.java`（缓存 + RemoteViews + PendingIntent）、`WidgetProvider.java`（只读缓存渲染）、`WidgetModule.java`（`widget.update/clear/list`）。
+- `LuaRuntime` / `RuntimeManager` / `MainActivity` 接入 widget 控制器与点击事件（`berba-widget://open/<id>`）。
+- `runtime.js` 增加 `widget` 桩、`widget` 事件白名单与 dev 能力识别。
+
+已验证：
+
+```text
+gofmt -l .           # 无输出
+go build ./...       # 通过
+go test ./...        # 全绿
+scripts/build-shell.sh   # javac --release 17 + JVM 测试 + d8 通过（无 NDK，跳过 shim）
+```
+
+未验证：真机、`berba build examples/widget`（示例尚未创建）、CI。
+
+下次继续的顺序：
+
+1. `examples/widget/`（`app.json` + `lua/main.lua` + `www/`），用 `berba build` 验证 aapt2 编译与 receiver 落地。
+2. `internal/resources/widget_test.go`、`internal/manifest` 组件断言、`WidgetStateTest.java`。
+3. `ci.yml` 增加 widget 示例构建与资源断言；`README.md` 能力列表。
+4. 设备矩阵 widget 项（添加/删除/重启/force-stop/点击/Doze/深色模式/字体放大）。
+
 ## 本轮目标与非目标
 
 ### 目标
@@ -104,7 +146,7 @@ end)
 
 > 每个小节独立可验证；7.1 → 7.2 → 7.3 有依赖，7.4/7.5 可与 7.2 并行。
 
-### 7.1 规格、Manifest 与资源
+### 7.1 规格、Manifest 与资源 ✅
 
 **新增**
 
@@ -162,7 +204,7 @@ end)
 - 顶部 `widget_title` + `widget_updated`（更新时间，小字）。
 - `res/xml/berba_widget_info.xml`：`minWidth=250dp`、`minHeight=110dp`、`updatePeriodMillis=0`（由 Lua 主动推）、`initialLayout=@layout/berba_widget`、`resizeMode="horizontal|vertical"`、`widgetCategory="home_screen"`、`previewImage=@drawable/berba_widget_preview`（可选）。
 
-### 7.2 壳：Provider 与渲染
+### 7.2 壳：Provider 与渲染 ✅
 
 **新增**
 
@@ -183,7 +225,7 @@ end)
 - `MainActivity.java`：`onCreate` / `onNewIntent` 识别 `berba-widget://` scheme，交给 `RuntimeManager.captureWidget`；消费后移除 extras，避免旋转重复触发。
 - `CapabilityRegistry.java`（生成）自动加入 `WidgetModule.install`。
 
-### 7.3 数据流与刷新
+### 7.3 数据流与刷新 ✅
 
 ```text
 task 定时触发（无界面）
@@ -201,7 +243,7 @@ launcher 重新绑定 / 重启 / 进程被杀后 onUpdate
 - 需要定时刷新时用 `task`（`every ≥ 900s`），在 `app.on("task")` 里调用 `widget.update`。
 - 渲染线程：`AppWidgetManager.updateAppWidget` 可在任意线程调用，但统一 post 到主线程，避免与 launcher 回调竞争。
 
-### 7.4 dev、文档与示例
+### 7.4 dev、文档与示例 🟡
 
 - `internal/devserver/luaruntime/assets/runtime.js`：新增 `widget` 桩（`update/clear` 打印并返回本地时间戳，`list` 返回 `{}`），事件白名单加入 `widget`，保持在 `applyModuleMeta` 的自检范围内。
 - `docs/lua-api.md`、`docs/config.md`、`docs/testing.md`、`templates/init/AGENTS.md`、`README.md`：增加 widget 章节（RemoteViews 限制、刷新频率、无 configure Activity）。
@@ -210,7 +252,7 @@ launcher 重新绑定 / 重启 / 进程被杀后 onUpdate
   - `lua/main.lua`：`create` 时推一次，`app.on("task")` 定时刷新
   - `www/index.html`：卡片预览 + 「立即刷新」按钮（走 `bridge`）
 
-### 7.5 测试与 CI
+### 7.5 测试与 CI 🔴
 
 **Go**
 

@@ -210,6 +210,18 @@ func Build(ctx context.Context, opts Options) (result *Result, retErr error) {
 			if err := resources.GenerateNotificationIcon(resDir); err != nil {
 				return nil, fmt.Errorf("生成通知图标失败: %w", err)
 			}
+		case "widget_layout":
+			if err := resources.GenerateWidgetLayout(resDir); err != nil {
+				return nil, fmt.Errorf("生成小组件布局失败: %w", err)
+			}
+		case "widget_info":
+			if err := resources.GenerateWidgetInfo(resDir); err != nil {
+				return nil, fmt.Errorf("生成小组件元数据失败: %w", err)
+			}
+		case "widget_drawable":
+			if err := resources.GenerateWidgetDrawable(resDir); err != nil {
+				return nil, fmt.Errorf("生成小组件背景失败: %w", err)
+			}
 		default:
 			return nil, fmt.Errorf("未知的资源生成器: %q", resource)
 		}

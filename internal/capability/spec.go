@@ -219,10 +219,14 @@ var allowedComponents = map[string]bool{
 	"task_job_service":    true,
 	"task_alarm_receiver": true,
 	"task_boot_receiver":  true,
+	"widget_provider":     true,
 }
 
 var allowedResources = map[string]bool{
 	"notification_icon": true,
+	"widget_drawable":   true,
+	"widget_info":       true,
+	"widget_layout":     true,
 }
 
 var allowedBrowser = map[string]bool{

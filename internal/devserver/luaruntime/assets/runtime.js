@@ -226,7 +226,7 @@
   var moduleLoading = Object.create(null);
   var handlers = {
     boot: [], create: [], pause: [], resume: [], destroy: [], back: [], newIntent: [],
-    notification: [], task: []
+    notification: [], task: [], widget: []
   };
   var webHandlers = { pageStarted: [], pageFinished: [], error: [] };
   var bridges = Object.create(null);
@@ -1297,6 +1297,35 @@
     return 1;
   }
 
+  // -------------------------------------------------------------- widget
+  // 浏览器没有桌面小组件：只记录调用，返回空实例列表，避免静默成功。
+
+  function widgetUpdate(L) {
+    if (isNil(L, 1) || lua.lua_type(L, 1) !== lua.LUA_TTABLE) {
+      return luaError(L, "bad argument #1 to 'widget.update' (table expected)");
+    }
+    var input = readJsValue(L, 1);
+    var cards = [];
+    if (input && Array.isArray(input.cards)) {
+      cards = input.cards;
+    } else if (Array.isArray(input)) {
+      cards = input;
+    }
+    cards = cards.slice(0, 20);
+    console.log('[berba dev] widget.update：浏览器环境不渲染桌面小组件（' + cards.length + ' 张卡片）');
+    return pushValueTable(L, { updatedAt: Date.now(), ids: [] });
+  }
+
+  function widgetClear(L) {
+    console.log('[berba dev] widget.clear：浏览器环境无桌面小组件');
+    pushBool(L, true);
+    return 1;
+  }
+
+  function widgetList(L) {
+    return pushValueTable(L, []);
+  }
+
   // -------------------------------------------------------------- native
 
   function unsupportedNativeFn(label) {
@@ -1696,14 +1725,14 @@
   function checkCapabilities() {
     if (!capabilityMeta) return;
     Object.keys(capabilityMeta).sort().forEach(function (name) {
-      if (name !== 'native' && name !== 'notify' && name !== 'task') {
+      if (name !== 'native' && name !== 'notify' && name !== 'task' && name !== 'widget') {
         console.error('[berba dev] 壳未实现能力: ' + name + '（相关函数将抛错）');
       }
     });
   }
 
   function registerGlobals(L) {
-    APP_EVENTS = buildEventSet('app', CORE_APP_EVENTS, ['notification', 'task']);
+    APP_EVENTS = buildEventSet('app', CORE_APP_EVENTS, ['notification', 'task', 'widget']);
     WEB_EVENTS = buildEventSet('web', CORE_WEB_EVENTS, []);
     setModule(L, 'app', { on: appOn, exit: appExit, info: appInfo });
     setModule(L, 'web', {
@@ -1735,6 +1764,11 @@
     if (capabilityEnabled('task')) {
       setModule(L, 'task', {
         schedule: taskSchedule, cancel: taskCancel, list: taskList, exact: taskExact
+      });
+    }
+    if (capabilityEnabled('widget')) {
+      setModule(L, 'widget', {
+        update: widgetUpdate, clear: widgetClear, list: widgetList
       });
     }
     if (capabilityEnabled('native')) {

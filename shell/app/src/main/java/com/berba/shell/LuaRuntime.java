@@ -42,6 +42,7 @@ final class LuaRuntime {
     private final AppConfig config;
     private final CapabilityConfig capabilities;
     private final NotifyController notify;
+    private final WidgetController widget;
     private final HandlerThread thread;
     private volatile Handler handler;
     private Globals globals;
@@ -59,11 +60,12 @@ final class LuaRuntime {
     private volatile UiSession ui;
 
     LuaRuntime(Context context, AppConfig config, CapabilityConfig capabilities,
-               NotifyController notify) {
+               NotifyController notify, WidgetController widget) {
         this.context = context.getApplicationContext();
         this.config = config;
         this.capabilities = capabilities;
         this.notify = notify;
+        this.widget = widget;
         this.thread = new HandlerThread("berba-lua");
     }
 
@@ -89,6 +91,10 @@ final class LuaRuntime {
 
     NotifyController notifyController() {
         return notify;
+    }
+
+    WidgetController widgetController() {
+        return widget;
     }
 
     UiSession ui() {

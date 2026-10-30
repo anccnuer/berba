@@ -3,7 +3,8 @@
   "capabilities": [
     "native",
     "notify",
-    "task"
+    "task",
+    "widget"
   ],
   "nativeAbiVersion": 1
 }

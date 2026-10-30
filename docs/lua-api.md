@@ -326,6 +326,37 @@ end)
 task.cancel("sync")
 ```
 
+## widget
+
+需要 `capabilities` 包含 `"widget"`。桌面小组件用固定槽位渲染卡片，**不加载 WebView**；数据由 Lua 主动推送，进程被回收或 launcher 重启后仍显示最后一次缓存。
+
+| 方法 | 说明 |
+| --- | --- |
+| `widget.update({ title, cards })` | 写入缓存并刷新所有实例；`cards` 为 `{ title, value, subtitle, color }` 数组，最多 20 张；返回 `{ updatedAt, ids }` |
+| `widget.update(cards)` | 省略标题的简写，参数直接作为卡片数组 |
+| `widget.clear()` | 清空缓存，小组件显示为占位 |
+| `widget.list()` | 返回已放置实例数组，元素含 `id` 与 `updatedAt`；未放置时为空表 |
+
+- 只渲染前 5 张卡片（`title` ≤ 24、`value` ≤ 16、`subtitle` ≤ 32 字符，超出以 `…` 截断）；`color` 接受 `#RRGGBB` / `#AARRGGBB`，非法时忽略。
+- 状态上限 32KB；无实例时 `widget.update` 只写缓存，`ids` 为空表，不报错。
+- 系统不自动刷新（`updatePeriodMillis=0`）：需要定时更新时用 `task`（`every ≥ 900`），在任务里调用 `widget.update`。
+- 点击卡片会打开应用并触发 `widget` 事件，参数 `{ id = <实例 id>, coldStart = <boolean> }`；冷启动在 `create` 之后触发。
+- RemoteViews 限制：只能用框架控件，不能放 WebView，也不能动态加行；因此卡片是固定 5 行，超出部分丢弃。
+
+```lua
+widget.update({
+  title = "今日概览",
+  cards = {
+    { title = "天气", value = "26°", subtitle = "多云" },
+    { title = "步数", value = "8,421", subtitle = "目标 10,000", color = "#3DDC84" }
+  }
+})
+
+app.on("widget", function(ev)
+  log("widget " .. tostring(ev.id) .. " cold=" .. tostring(ev.coldStart))
+end)
+```
+
 ## native
 
 需要 `capabilities` 包含 `"native"`，并在 `app.json` 的 `native.plugins` 中声明插件。每个插件按 `spec.json` 暴露 `native.<module>.<function>`；未声明的模块/函数不可见。插件在应用启动时加载，失败时对应函数替换为抛错桩，其他插件继续可用。

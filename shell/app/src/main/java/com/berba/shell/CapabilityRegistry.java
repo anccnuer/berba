@@ -20,6 +20,7 @@ final class CapabilityRegistry {
             case "native":
             case "notify":
             case "task":
+            case "widget":
                 return true;
             default:
                 return false;
@@ -37,6 +38,9 @@ final class CapabilityRegistry {
         }
         if (cfg.hasCapability("task")) {
             TaskModule.install(rt, g); // 能力 task
+        }
+        if (cfg.hasCapability("widget")) {
+            WidgetModule.install(rt, g); // 能力 widget
         }
     }
 }

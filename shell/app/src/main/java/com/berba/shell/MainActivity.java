@@ -127,6 +127,7 @@ public class MainActivity extends Activity {
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
         configureWebView();
         manager.captureNotification(getIntent());
+        manager.captureWidget(getIntent());
         pendingDeepLink = deepLinkUrl(getIntent());
         session = manager.attach(this, this::onSessionCreated);
         bridge = new JsBridge(session);
@@ -321,6 +322,7 @@ public class MainActivity extends Activity {
         }
         deliverDeepLink();
         manager.deliverNotifications(lua);
+        manager.deliverWidgets(lua);
     }
 
     private void deliverDeepLink() {
@@ -337,6 +339,12 @@ public class MainActivity extends Activity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
+        if (manager != null && manager.captureWidget(intent)) {
+            if (lua != null && session != null && session.isCurrent()) {
+                manager.deliverWidgets(lua);
+            }
+            return;
+        }
         if (manager != null && manager.captureNotification(intent)) {
             if (lua != null && session != null && session.isCurrent()) {
                 manager.deliverNotifications(lua);
@@ -359,7 +367,9 @@ public class MainActivity extends Activity {
             return "";
         }
         Uri data = intent.getData();
-        if (data == null || NotifyController.NOTIFY_SCHEME.equalsIgnoreCase(data.getScheme())) {
+        if (data == null
+                || NotifyController.NOTIFY_SCHEME.equalsIgnoreCase(data.getScheme())
+                || WidgetController.SCHEME.equalsIgnoreCase(data.getScheme())) {
             return "";
         }
         return data.toString();

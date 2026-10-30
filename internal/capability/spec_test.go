@@ -10,8 +10,8 @@ func TestLoadBuiltin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(reg.Specs()) != 4 {
-		t.Fatalf("specs = %d, want 4", len(reg.Specs()))
+	if len(reg.Specs()) != 5 {
+		t.Fatalf("specs = %d, want 5", len(reg.Specs()))
 	}
 	core, ok := reg.Spec("core")
 	if !ok {
@@ -37,7 +37,7 @@ func TestLoadBuiltin(t *testing.T) {
 		}
 	}
 	caps := reg.Capabilities()
-	if len(caps) != 3 || caps[0] != "native" || caps[1] != "notify" || caps[2] != "task" {
+	if len(caps) != 4 || caps[0] != "native" || caps[1] != "notify" || caps[2] != "task" || caps[3] != "widget" {
 		t.Fatalf("capabilities = %v", caps)
 	}
 	native, ok := reg.Spec("native")

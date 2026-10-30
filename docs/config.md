@@ -119,8 +119,9 @@
 | `notify` | 本地通知：自动加入 `POST_NOTIFICATIONS`、生成 `drawable-*/ic_stat_berba.png` 小图标，并让 Activity 使用 `launchMode="singleTask"` |
 | `task` | 后台定时任务：自动加入 `RECEIVE_BOOT_COMPLETED`、`SCHEDULE_EXACT_ALARM`，注册 `TaskJobService`、`TaskAlarmReceiver`、`TaskBootReceiver`；需要 `lua` 目录 |
 | `native` | 原生插件：加载 `native.plugins` 声明的 C ABI 共享库，设置 `extractNativeLibs="true"`；需要 `lua` 目录 |
+| `widget` | 桌面小组件：注册 `WidgetProvider`，生成 `layout/berba_widget.xml`、`xml/berba_widget_info.xml` 与圆角背景；需要 `lua` 目录 |
 
-能力名必须匹配 `^[a-z][a-z0-9_]{0,31}$`，重复项自动去重；`core` 无需也无法写入。未实现的能力名会导致构建失败。能力会自动合并 Manifest 权限、组件与资源，无需在 `permissions` 中重复声明这些权限。完整 API 见 [lua-api.md](lua-api.md#notify) 与自动生成的 [capabilities.md](capabilities.md)。`notify`、`task` 与 `native` 都要求 Lua 运行时。
+能力名必须匹配 `^[a-z][a-z0-9_]{0,31}$`，重复项自动去重；`core` 无需也无法写入。未实现的能力名会导致构建失败。能力会自动合并 Manifest 权限、组件与资源，无需在 `permissions` 中重复声明这些权限。完整 API 见 [lua-api.md](lua-api.md#notify) 与自动生成的 [capabilities.md](capabilities.md)。`notify`、`task`、`native` 与 `widget` 都要求 Lua 运行时。
 
 ## 原生插件
 

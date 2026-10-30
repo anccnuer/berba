@@ -333,7 +333,32 @@ app.on("task", function(ctx)
 end)
 ```
 
-### 6.13 json 与 log
+### 6.13 widget（需 `capabilities: ["widget"]`）
+
+| API | 说明 |
+| --- | --- |
+| `widget.update({ title, cards })` | 写入缓存并刷新所有实例；`cards` 为 `{ title, value, subtitle, color }` 数组，最多 20 张；返回 `{ updatedAt, ids }` |
+| `widget.update(cards)` | 省略标题的简写，参数直接作为卡片数组 |
+| `widget.clear()` | 清空缓存，小组件显示为占位 |
+| `widget.list()` | 已放置实例数组，元素含 `id` 与 `updatedAt`；未放置时为空表 |
+
+桌面小组件固定渲染 5 行卡片（`title` ≤ 24、`value` ≤ 16、`subtitle` ≤ 32 字符，超出以 `…` 截断），`color` 接受 `#RRGGBB` / `#AARRGGBB`。状态存 `SharedPreferences("berba_widget")`，上限 32KB；`WidgetProvider` 只读缓存渲染，**不会启动 Lua**，所以进程被回收或 launcher 重启后仍显示最后一次数据。系统不自动刷新（`updatePeriodMillis=0`），需要定时更新时用 `task` 调用 `widget.update`。点击卡片会打开应用并触发 `widget` 事件（`{ id, coldStart }`，冷启动在 `create` 之后）。RemoteViews 不能放 WebView、不能动态加行，也不支持可滚动集合与配置 Activity。
+
+```lua
+widget.update({
+  title = "今日概览",
+  cards = {
+    { title = "天气", value = "26°", subtitle = "多云" },
+    { title = "步数", value = "8,421", subtitle = "目标 10,000", color = "#3DDC84" }
+  }
+})
+
+app.on("widget", function(ev)
+  log("widget", ev.id, tostring(ev.coldStart))
+end)
+```
+
+### 6.14 json 与 log
 
 ```lua
 local text = json.encode({ a = 1 })      -- '{"a":1}'
@@ -343,7 +368,7 @@ log("tag", 123)                            -- Logcat，tag = berba
 
 JSON 转换：键为 `1..n` 连续整数的表编码为数组，否则为对象（空表为 `{}`）；`nil` → `null`；函数/userdata 编码为 `null`；存在循环引用或嵌套超过 64 层时整个结果为 `"null"`。
 
-### 6.14 dev 浏览器运行时
+### 6.15 dev 浏览器运行时
 
 `berba dev` 在项目启用 Lua 时用 fengari 执行 `lua.entry`（Lua 5.3），设备壳是 LuaJ（Lua 5.2）。`require`、`bridge.register`、`bridge.emit`、`app.on("create")`、`web.on("pageFinished")` 行为一致；入口抛错时 pending 的 `berba.call` 会 reject。
 
@@ -371,7 +396,7 @@ JSON 转换：键为 `1..n` 连续整数的表编码为数组，否则为对象�
 - `--host 0.0.0.0` 会把项目源码与 Lua 执行能力暴露到局域网，仅真机联调时临时使用，用完改回 `127.0.0.1`。
 - 浏览器通过不代表设备通过：提交前仍需 `berba build` 并上机验证权限、文件、方向与全屏。
 
-### 6.15 native（需 `capabilities: ["native"]`）
+### 6.16 native（需 `capabilities: ["native"]`）
 
 模块与函数名来自插件 `spec.json`，构建期合并进能力资产；未声明的模块/函数不可见。
 
