@@ -9,7 +9,7 @@
   <a href="#限制"><img src="https://img.shields.io/badge/Android-7.0%2B-3DDC84?logo=android&logoColor=white&style=flat-square" alt="Android 7.0+"></a>
   <a href="#从源码构建"><img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-555555?style=flat-square" alt="Platform"></a>
   <a href="#设计思路"><img src="https://img.shields.io/badge/Go%20dependencies-none-success?style=flat-square" alt="Zero Go dependencies"></a>
-  <a href="#小剧场"><img src="https://img.shields.io/badge/%E4%BA%8C%E6%AC%A1%E5%85%83%E6%B5%93%E5%BA%A6-%E5%BE%AE%E7%B3%96-ff8fb1?style=flat-square" alt="二次元浓度：微糖"></a>
+  <a href="#小剧场"><img src="https://img.shields.io/badge/%E4%BA%8C%E6%AC%A1%E5%85%83%E6%B5%93%E5%BA%A6-%E5%BE%AE%E7%94%9C-ff8fb1?style=flat-square" alt="二次元浓度：微甜"></a>
 </p>
 
 berba 是一个轻量的 Android 应用构建器：用 HTML/CSS/JS 写界面，用 Lua 写逻辑，一条命令产出可安装的 APK。终端用户不需要 JDK、Android SDK 或 Android Studio——解压发行包即可开始。
