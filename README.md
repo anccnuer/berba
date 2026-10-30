@@ -71,6 +71,7 @@ cd myapp
 | [`examples/notify`](examples/notify) | 本地通知：权限申请、通道、显示/取消、点击事件（冷/热启动） |
 | [`examples/task`](examples/task) | 后台定时任务：一次性/周期/每日排程、无界面触发、`ctx.done()` 与超时 |
 | [`examples/native-echo`](examples/native-echo) | 原生插件：C ABI、同步 `greet`、跨线程 `greet_later`、构建期 ELF 校验 |
+| [`examples/widget`](examples/widget) | 桌面小组件：卡片数据由 Lua 计算，`task` 定时刷新，点击事件回传界面 |
 
 ```bat
 cd examples\led-banner

@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Widget 示例</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Widget 示例</h1>
+      <p>桌面小组件：卡片数据由 Lua 计算，<code>task</code> 定时刷新，点击事件回传到界面。</p>
+    </header>
+
+    <p class="status" id="status" aria-live="polite">正在读取小组件状态…</p>
+
+    <section class="preview">
+      <h2>小组件预览</h2>
+      <div class="widget-frame">
+        <div class="widget-title" id="previewTitle">今日概览</div>
+        <div class="widget-updated" id="previewUpdated"></div>
+        <ul class="widget-cards" id="previewCards"></ul>
+        <p class="widget-hint">布局固定 5 行：多余卡片会被截断并记日志。</p>
+      </div>
+    </section>
+
+    <section class="actions">
+      <button id="refresh">立即刷新</button>
+      <button id="clear" class="secondary">widget.clear()</button>
+      <button id="schedule" class="secondary">每 15 分钟刷新</button>
+      <button id="reload" class="secondary">重新读取</button>
+    </section>
+
+    <pre id="out" aria-live="polite">等待操作…</pre>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -208,6 +208,25 @@ jobs:
           grep -q "android.permission.RECEIVE_BOOT_COMPLETED" /tmp/task.xml
           grep -q "android.permission.SCHEDULE_EXACT_ALARM" /tmp/task.xml
 
+          build_example widget
+          grep -qE '"widget": \{' /tmp/cap-widget.json
+          grep -q 'com.berba.shell.WidgetProvider' /tmp/widget.xml
+          grep -q 'android.appwidget.provider' /tmp/widget.xml
+          grep -q 'android.appwidget.action.APPWIDGET_UPDATE' /tmp/widget.xml
+          grep -qE 'android:launchMode\([^)]*\)=2' /tmp/widget.xml
+          "$AAPT2" dump resources "$APK" > /tmp/widget-resources.txt
+          grep -q "layout/berba_widget" /tmp/widget-resources.txt
+          grep -q "xml/berba_widget_info" /tmp/widget-resources.txt
+          grep -q "drawable/berba_widget_bg" /tmp/widget-resources.txt
+          grep -q "drawable/berba_widget_card" /tmp/widget-resources.txt
+          grep -q "drawable-xxxhdpi-v4/berba_widget_preview.png" /tmp/widget-resources.txt
+          if grep -q "^lib/" /tmp/entries-widget.txt; then
+            echo "widget 示例不应包含 lib/" >&2; exit 1
+          fi
+          # 小组件能力同样要满足可复现构建。
+          "$BERBA" build examples/widget --home "$RUNNER_TEMP/dist" --out "$RUNNER_TEMP/example-widget2"
+          cmp "$RUNNER_TEMP/example-widget/"*.apk "$RUNNER_TEMP/example-widget2/"*.apk
+
       - name: Build native example
         env:
           ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.root }}

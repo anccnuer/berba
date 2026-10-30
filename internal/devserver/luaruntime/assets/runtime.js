@@ -2,7 +2,7 @@
  * berba dev 浏览器 Lua 运行时。
  *
  * 基于 fengari（Lua 5.3），把设备壳里的 berba Lua API 尽量等价地模拟到浏览器：
- * app / web / bridge / http / file / store / permission / ui / device / notify / task / native / json / log。
+ * app / web / bridge / http / file / store / permission / ui / device / notify / task / widget / native / json / log。
  *
  * 与设备的差异（dev 专属，见 docs/build.md）：
  *   - 平台标识为 "browser"，sdk 为 0；除通知权限外 permission 一律视为已授权；
@@ -10,6 +10,7 @@
  *   - http 直连受浏览器 CORS 限制；明文 http 不拦截；
  *   - notify 使用 Web Notifications：无通道、页面关闭后通知点击不再回调；
  *   - task 只能注册 app.on("task")，task.schedule 直接报“浏览器不支持后台任务”；
+ *   - widget 没有桌面宿主：widget.update/clear/list 是打印提示的桩，返回模拟时间戳/空表；
  *   - native.list 返回插件/模块信息，所有插件函数抛“原生插件仅在设备上可用”；
  *   - 未启用的能力不安装对应模块；事件白名单来自 lua.json 的能力元数据；
  *   - 浏览器返回键无法拦截，用 window.__berbaDev.back() 手动触发 app.on("back")。
@@ -226,7 +227,7 @@
   var moduleLoading = Object.create(null);
   var handlers = {
     boot: [], create: [], pause: [], resume: [], destroy: [], back: [], newIntent: [],
-    notification: [], task: []
+    notification: [], task: [], widget: []
   };
   var webHandlers = { pageStarted: [], pageFinished: [], error: [] };
   var bridges = Object.create(null);
@@ -1297,6 +1298,37 @@
     return 1;
   }
 
+  // -------------------------------------------------------------- widget
+
+  // 浏览器没有桌面小组件：桩函数打印提示并返回模拟值，避免静默成功。
+  function widgetWarn(fn) {
+    console.warn('[berba dev] widget.' + fn + ' 是桩：浏览器没有桌面小组件，仅在设备上渲染');
+  }
+
+  function widgetUpdate(L) {
+    widgetWarn('update');
+    lua.lua_newtable(L);
+    pushStr(L, 'updatedAt');
+    pushNumber(L, Date.now());
+    lua.lua_settable(L, -3);
+    pushStr(L, 'ids');
+    lua.lua_newtable(L);
+    lua.lua_settable(L, -3);
+    return 1;
+  }
+
+  function widgetClear(L) {
+    widgetWarn('clear');
+    lua.lua_pushnil(L);
+    return 1;
+  }
+
+  function widgetList(L) {
+    widgetWarn('list');
+    lua.lua_newtable(L);
+    return 1;
+  }
+
   // -------------------------------------------------------------- native
 
   function unsupportedNativeFn(label) {
@@ -1696,14 +1728,14 @@
   function checkCapabilities() {
     if (!capabilityMeta) return;
     Object.keys(capabilityMeta).sort().forEach(function (name) {
-      if (name !== 'native' && name !== 'notify' && name !== 'task') {
+      if (name !== 'native' && name !== 'notify' && name !== 'task' && name !== 'widget') {
         console.error('[berba dev] 壳未实现能力: ' + name + '（相关函数将抛错）');
       }
     });
   }
 
   function registerGlobals(L) {
-    APP_EVENTS = buildEventSet('app', CORE_APP_EVENTS, ['notification', 'task']);
+    APP_EVENTS = buildEventSet('app', CORE_APP_EVENTS, ['notification', 'task', 'widget']);
     WEB_EVENTS = buildEventSet('web', CORE_WEB_EVENTS, []);
     setModule(L, 'app', { on: appOn, exit: appExit, info: appInfo });
     setModule(L, 'web', {
@@ -1736,6 +1768,9 @@
       setModule(L, 'task', {
         schedule: taskSchedule, cancel: taskCancel, list: taskList, exact: taskExact
       });
+    }
+    if (capabilityEnabled('widget')) {
+      setModule(L, 'widget', { update: widgetUpdate, clear: widgetClear, list: widgetList });
     }
     if (capabilityEnabled('native')) {
       installNative(L);

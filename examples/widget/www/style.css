@@ -1,0 +1,174 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(160deg, #eef4ff 0%, #f7f8fa 45%, #f5f6f8 100%);
+  color: #1f2328;
+}
+
+main {
+  width: min(640px, calc(100vw - 40px));
+  padding: 28px;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 18px 48px rgb(15 23 42 / 10%);
+}
+
+h1 {
+  margin: 0 0 6px;
+  font-size: 28px;
+}
+
+h2 {
+  margin: 0 0 12px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #57606a;
+}
+
+header p {
+  margin: 0 0 18px;
+  color: #57606a;
+  line-height: 1.6;
+}
+
+code {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: rgb(99 102 241 / 12%);
+  font-size: 0.9em;
+}
+
+.status {
+  margin: 0 0 18px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgb(99 102 241 / 8%);
+  color: #374151;
+  font-size: 14px;
+}
+
+.status.off {
+  background: rgb(245 158 11 / 12%);
+  color: #92400e;
+}
+
+.preview {
+  margin-bottom: 20px;
+}
+
+.widget-frame {
+  padding: 16px;
+  border-radius: 14px;
+  background: #3A3A3C;
+}
+
+.widget-title {
+  color: #b3b3b3;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.widget-updated {
+  margin: 2px 0 10px;
+  color: #8a8a8a;
+  font-size: 11px;
+}
+
+.widget-cards {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.card {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgb(255 255 255 / 10%);
+  color: #fff;
+  font-size: 12px;
+}
+
+.card-label {
+  color: #b3b3b3;
+  min-width: 52px;
+}
+
+.card-value {
+  font-size: 22px;
+  font-weight: 700;
+  flex: 1;
+}
+
+.card-sub {
+  color: #8a8a8a;
+  font-size: 11px;
+}
+
+.card.extra {
+  background: transparent;
+  color: #8a8a8a;
+  font-size: 11px;
+  padding-left: 4px;
+}
+
+.widget-hint {
+  margin: 10px 0 0;
+  color: #8a8a8a;
+  font-size: 11px;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+button {
+  padding: 10px 16px;
+  border: none;
+  border-radius: 10px;
+  background: #4f46e5;
+  color: #fff;
+  font-size: 14px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #4338ca;
+}
+
+button.secondary {
+  background: #eef2ff;
+  color: #3730a3;
+}
+
+button.secondary:hover {
+  background: #e0e7ff;
+}
+
+pre {
+  margin: 0;
+  padding: 14px;
+  border-radius: 10px;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
