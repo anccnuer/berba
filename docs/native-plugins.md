@@ -94,7 +94,7 @@ myapp/
 
 ## C ABI v1
 
-公共头文件：[`include/berba_plugin.h`](../include/berba_plugin.h)。
+公共头文件：[`include/berba_plugin.h`](https://github.com/anccnuer/berba/blob/main/include/berba_plugin.h)。
 
 ```c
 const char *berba_plugin_describe(void);
@@ -167,7 +167,7 @@ void berba_plugin_free(void *data);
 
 ## 示例插件与调试
 
-- [`examples/native-echo`](../examples/native-echo)：同步 `greet` + 跨线程 `greet_later`。
+- [`examples/native-echo`](https://github.com/anccnuer/berba/tree/main/examples/native-echo)：同步 `greet` + 跨线程 `greet_later`。
 - 插件日志通过 `berba_host.log` 写入 Logcat，tag 为 `berba-plugin`；Lua 侧 `log` 仍为 `berba`。
 - 插件内不要缓存宿主的栈内存；异步完成前不要释放 `complete_context` 指向的数据。
 - 不要 `dlclose` 或尝试卸载插件；壳故意不卸载已加载的库。

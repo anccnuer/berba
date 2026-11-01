@@ -190,6 +190,7 @@ scripts\build-shell.ps1 -Sdk C:\Android\Sdk -Out payload
 
 | 文档 | 内容 |
 | --- | --- |
+| [docs/intro.md](docs/intro.md) | 总览：这是什么、适合做什么、30 秒上手与文档地图 |
 | [docs/config.md](docs/config.md) | `app.json` 字段与解析规则 |
 | [docs/lua-api.md](docs/lua-api.md) | Lua API、桥协议与事件 |
 | [docs/capabilities.md](docs/capabilities.md) | 能力与 API 清单（由规格自动生成） |
