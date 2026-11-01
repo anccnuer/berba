@@ -50,7 +50,7 @@ app.exit()
 
 ## 可选能力必须显式启用
 
-`notify`、`task`、`native` 不再无条件安装。未写入 `app.json` 时，对应模块是 `nil`；调用其函数会抛错，而 `app.on("notification")` / `app.on("task")` 会被拒绝为未知事件。
+`notify`、`task`、`native`、`widget` 不再无条件安装。未写入 `app.json` 时，对应模块是 `nil`；调用其函数会抛错，而 `app.on("notification")` / `app.on("task")` / `app.on("widget")` 会被拒绝为未知事件。
 
 ```json
 {
@@ -72,7 +72,7 @@ else
 end
 ```
 
-声明了 `native.plugins` 必须同时启用 `native` 能力，否则构建失败。`berba dev` 使用与设备相同的门控：未启用能力的模块在浏览器里同样不存在，`native.*` 只安装抛错桩，所以这类漂移在浏览器阶段就能暴露。
+声明了 `native.plugins` 必须同时启用 `native` 能力，否则构建失败。`berba dev` 使用与设备相同的门控：未启用能力的模块在浏览器里同样不存在，`native.*` 只安装抛错桩，`widget.*` 只安装打印警告的桩（不会静默成功），所以这类漂移在浏览器阶段就能暴露。
 
 ## 旧发行包只支持核心能力
 
@@ -84,7 +84,7 @@ end
 
 - [ ] 全文搜索 `app.on("destroy"`，确认处理器不再取消在途请求或关闭进程级资源。
 - [ ] 入口顶层的初始化改成 `app.on("create")` 内可重入执行。
-- [ ] 所有 `notify.*` / `task.*` / `native.*` 调用点已在 `app.json` 声明对应能力。
+- [ ] 所有 `notify.*` / `task.*` / `native.*` / `widget.*` 调用点已在 `app.json` 声明对应能力。
 - [ ] 依赖 `app.exit()` 退出的逻辑改为显式界面操作，后台任务用 `task.*` 重新安排。
 - [ ] `berba doctor` 的能力行与 `启用能力:` 输出符合预期；`berba dev` 与设备行为一致。
 - [ ] `berba build` 后 `assets/berba_capabilities.json` 的 `capabilities` 与项目声明一致。

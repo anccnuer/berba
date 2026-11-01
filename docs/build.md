@@ -72,10 +72,12 @@ dev 运行时基于 fengari（Lua 5.3），设备壳是 LuaJ（Lua 5.2），且�
 | `pause` / `resume` | 绑定 `visibilitychange` |
 | `app.on("notification")` | 仅当 `capabilities` 含 `notify` 时可注册；浏览器通知点击时触发，页面关闭后不再回调，可用 `window.__berbaDev.notify(id, data)` 手动触发 |
 | `app.on("task")` | 仅当 `capabilities` 含 `task` 时可注册；可以注册处理器（便于复用业务代码），但浏览器不会触发；`task.schedule` 抛“浏览器不支持后台任务”，`list` 返回空、`exact` 返回 `false` |
+| `app.on("widget")` | 仅当 `capabilities` 含 `widget` 时可注册；可以注册处理器，但浏览器没有桌面小组件，事件不会触发 |
 | `native.*` | 仅当 `capabilities` 含 `native` 时存在；`native.list()` 返回 `app.json` 声明的插件/模块/函数（`ok=false`），插件函数抛“原生插件仅在设备上可用”；请用 `dev/mock.js` 伪造结果 |
-| 未启用的能力 | `notify` / `task` / `native` 表与其他设备独有模块一样不存在；`/__berba/lua.json` 的 `capabilities`、`modules`、`events`、`native` 决定装载范围，元数据缺失时才回退为全部可用 |
+| 未启用的能力 | `notify` / `task` / `widget` / `native` 表与其他设备独有模块一样不存在；`/__berba/lua.json` 的 `capabilities`、`modules`、`events`、`native` 决定装载范围，元数据缺失时才回退为全部可用 |
 | `permission.*` | 除 `POST_NOTIFICATIONS` 使用浏览器通知权限外，其余视为已授权 |
 | `notify.*` | 基于 Web Notifications：`channel` 仅校验参数不生效；点击后回到页面并触发事件，`data` 原样返回；无系统通知开关查询。浏览器通常要求在用户手势中申请权限，建议由按钮触发 `permission.request` |
+| `widget.*` | 打印警告的桩，不会静默成功：`update` 返回 `{ updatedAt, ids = {} }`（`updatedAt` 为浏览器当前时间戳），`clear` 返回 `nil`，`list` 返回空表；卡片渲染只能在设备上验证，`dev/mock.js` 中可伪造结果 |
 | `store` / `file` | 落在 `localStorage`，清站点数据即清空；单文件仍限制 8MB |
 | `http.*` | 直连受浏览器 CORS 限制，跨域请求会失败；明文 `http://` 不拦截 |
 | `http.request` 的 `onProgress` | 用 `ReadableStream` 读取，取不到 `Content-Length` 时总长为 `-1` |
@@ -117,7 +119,7 @@ berba watch --install
 
 1. **校验配置**：读取 `app.json`，检查包名、版本、主题、方向、权限、能力、入口文件、图标与 origin。
 2. **定位工具链**：`tools/aapt2.exe`、`tools/android.jar`、`payload/classes*.dex`。
-3. **渲染资源**：生成 `.berba/build/AndroidManifest.xml`、多密度 `mipmap-*/ic_launcher.png`、`values/strings.xml`；启用 `notify` 时额外生成 `drawable-*/ic_stat_berba.png`，并合并能力声明的权限与 `singleTask`；启用 `task` 时合并 `TaskJobService` 与两个 Receiver，以及开机/改时间/精确闹钟授权变化的 intent-filter。
+3. **渲染资源**：生成 `.berba/build/AndroidManifest.xml`、多密度 `mipmap-*/ic_launcher.png`、`values/strings.xml`；启用 `notify` 时额外生成 `drawable-*/ic_stat_berba.png`，并合并能力声明的权限与 `singleTask`；启用 `task` 时合并 `TaskJobService` 与两个 Receiver，以及开机/改时间/精确闹钟授权变化的 intent-filter；启用 `widget` 时生成 `layout/berba_widget.xml`、`xml/berba_widget_info.xml`、圆角 `drawable/berba_widget_*.xml` 与各密度预览图，合并 `WidgetProvider` receiver（此时 Activity 同样使用 `singleTask`，保证点击走 `onNewIntent`）。
 4. **aapt2**：
    ```
    aapt2 compile --dir .berba/build/res -o .berba/build/compiled.zip

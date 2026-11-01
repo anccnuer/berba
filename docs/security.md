@@ -100,6 +100,13 @@ base, table, string, math, coroutine, bit32
 - Event/Job 只调度任务本身，不执行外部代码；任务 handler 仍受 Lua 沙箱白名单约束。
 - force-stop 会由系统取消闹钟；Doze、厂商省电策略与 JobScheduler 配额下触发为 best-effort，不构成安全边界。
 
+## 桌面小组件
+
+- `widget` 能力注册 `WidgetProvider`（`exported="false"` + `APPWIDGET_UPDATE` intent-filter，`android.appwidget.provider` 元数据指向 `@xml/berba_widget_info`）。卡片是 RemoteViews 快照，由 launcher 进程渲染：不含 WebView，不执行 Lua/JS，也不接受外部构造的布局。
+- 缓存写入应用私有 `SharedPreferences("berba_widget")`（序列化 ≤ 32KB），不是加密存储；卡片文本会直接显示在桌面，**不要放入密钥或敏感个人信息**。
+- 点击 PendingIntent 使用显式组件（`MainActivity`）与 `berba-widget://open/<appWidgetId>` data，带 `FLAG_IMMUTABLE | FLAG_UPDATE_CURRENT`；不匹配该 scheme 的 Intent 只记日志并丢弃，消费后清空 extras，防止旋转等重复触发。
+- 进程被回收后 `onUpdate` 只读缓存渲染，不启动 Lua；刷新只能由本应用经前台界面或 `task` 能力主动推送，第三方无法借小组件触发本应用代码。
+
 ## 签名与分发
 
 - v2 签名覆盖 ZIP 条目、Central Directory 与 EOCD；构建结束会本地验签，并用 `aapt2 dump badging` 校验包名/版本。
