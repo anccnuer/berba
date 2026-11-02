@@ -84,17 +84,35 @@ final class WidgetState {
         }
     }
 
+    /**
+     * 按 Unicode 码点截断，末尾补省略号。
+     *
+     * <p>不能用 {@code value.length()} / {@code substring}：它们按 UTF-16 码元工作，
+     * emoji 等增补字符占 2 个码元，在中间切断会产生孤立代理项，渲染成 �。
+     */
     static String truncate(String value, int max) {
         if (value == null) {
             return "";
         }
-        if (value.length() <= max) {
+        if (value.codePointCount(0, value.length()) <= max) {
             return value;
         }
-        return value.substring(0, Math.max(0, max - 1)) + "…";
+        int end = 0;
+        int seen = 0;
+        while (end < value.length() && seen < max - 1) {
+            end += Character.charCount(value.codePointAt(end));
+            seen++;
+        }
+        return value.substring(0, end) + "…";
     }
 
-    /** 解析 #RRGGBB / #AARRGGBB；非法返回 NO_COLOR。 */
+    /**
+     * 解析 #RRGGBB / #AARRGGBB；非法返回 NO_COLOR。
+     *
+     * <p>一律补不透明 alpha：Android 的 {@code setTextColor(int)} 按 ARGB 解释，
+     * 若把 #RRGGBB 直接当成 int，alpha 位就是 0，文字会完全透明。
+     * 8 位形式里的 alpha 同样被忽略，因此 #AARRGGBB 与 #RRGGBB 等价。
+     */
     static int parseColor(String raw) {
         if (raw == null) {
             return NO_COLOR;
@@ -115,7 +133,7 @@ final class WidgetState {
             }
         }
         try {
-            return (int) Long.parseLong(value.substring(1), 16);
+            return 0xFF000000 | (int) Long.parseLong(value.substring(1), 16);
         } catch (NumberFormatException e) {
             return NO_COLOR;
         }
@@ -159,7 +177,14 @@ final class WidgetState {
             out.value = cardString(card, "value", VALUE_MAX, i);
             out.subtitle = cardString(card, "subtitle", SUBTITLE_MAX, i);
             Object rawColor = card.get("color");
-            out.color = rawColor instanceof String ? parseColor((String) rawColor) : NO_COLOR;
+            if (rawColor == null) {
+                out.color = NO_COLOR;
+            } else if (rawColor instanceof String) {
+                out.color = parseColor((String) rawColor);
+            } else {
+                throw new IllegalArgumentException(
+                        "小组件 cards[" + i + "] 的 color 必须是字符串");
+            }
             state.cards.add(out);
         }
         return state;
@@ -177,13 +202,19 @@ final class WidgetState {
         return truncate((String) raw, max);
     }
 
-    /** 宽松解析：缓存损坏时回退为空状态，而不是让渲染失败。 */
-    static WidgetState parseLenient(String json) {
+    /** 严格解析；非法 JSON 返回 null，由调用方决定如何清理（WidgetController 会自愈）。 */
+    static WidgetState parseOrNull(String json) {
         try {
             return parse(json);
         } catch (RuntimeException e) {
-            return empty();
+            return null;
         }
+    }
+
+    /** 宽松解析：缓存损坏时回退为空状态，而不是让渲染失败。 */
+    static WidgetState parseLenient(String json) {
+        WidgetState state = parseOrNull(json);
+        return state == null ? empty() : state;
     }
 
     String toJson() {

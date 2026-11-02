@@ -16,7 +16,6 @@ import android.widget.RemoteViews;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -44,7 +43,13 @@ final class WidgetController {
     private final ComponentName provider;
     private final SharedPreferences prefs;
     private final Handler main = new Handler(Looper.getMainLooper());
-    private final Map<String, Integer> resourceIds = new HashMap<>();
+    /**
+     * 资源 id 缓存。
+     *
+     * <p>理论上只有主线程的 {@link #doRender} 会访问（Lua 线程只走 {@code write → main.post}），
+     * 这里用 ConcurrentHashMap 作为兜底，避免日后有人从别的线程调用时踩到并发问题。
+     */
+    private final Map<String, Integer> resourceIds = new ConcurrentHashMap<>();
 
     private WidgetController(Context context) {
         this.context = context.getApplicationContext();
@@ -119,7 +124,25 @@ final class WidgetController {
     }
 
     WidgetState state() {
-        return WidgetState.parseLenient(prefs.getString(WidgetState.PREFS_KEY, null));
+        return readState(WidgetState.PREFS_KEY);
+    }
+
+    /**
+     * 读指定键的缓存。原文存在但解析失败时记日志并删掉坏键：否则损坏的缓存会
+     * 让小组件永远渲染空白，而且没有任何线索可查。
+     */
+    private WidgetState readState(String key) {
+        String raw = prefs.getString(key, null);
+        if (raw == null || raw.isEmpty()) {
+            return WidgetState.empty();
+        }
+        WidgetState parsed = WidgetState.parseOrNull(raw);
+        if (parsed == null) {
+            Log.w(TAG, "小组件缓存损坏，已清理 " + key + "（长度 " + raw.length() + "）");
+            prefs.edit().remove(key).apply();
+            return WidgetState.empty();
+        }
+        return parsed;
     }
 
     List<Integer> instanceIds() {

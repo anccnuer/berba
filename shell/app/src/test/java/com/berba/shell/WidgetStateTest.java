@@ -40,6 +40,9 @@ public final class WidgetStateTest {
         expectReject("{\"cards\":[{\"value\":1}]}");
         expectReject("{\"cards\":[{\"title\":}]}");
         expectReject("{\"updatedAt\":\"12\"}");
+        expectReject("{\"cards\":[{\"color\":123}]}");
+        expectReject("{\"cards\":[{\"color\":true}]}");
+        expectReject("{\"cards\":[{\"color\":[\"#fff\"]}]}");
     }
 
     private static void expectReject(String json) {
@@ -55,6 +58,8 @@ public final class WidgetStateTest {
         check(WidgetState.parseLenient(null).cards.isEmpty(), "null 缓存应回退为空");
         check(WidgetState.parseLenient("not json").cards.isEmpty(), "损坏缓存应回退为空");
         check(WidgetState.parseLenient("{\"cards\":[1]}").cards.isEmpty(), "结构错误应回退为空");
+        check(WidgetState.parseLenient("{\"cards\":[{\"color\":123}]}").cards.isEmpty(),
+                "字段类型错误应回退为空");
     }
 
     private static void testTruncate() {
@@ -62,6 +67,33 @@ public final class WidgetStateTest {
         check(WidgetState.truncate("abc", 4).equals("abc"), "未超长不截断");
         check(WidgetState.truncate("abcdef", 4).equals("abc…"), "超长补省略号");
         check(WidgetState.truncate("abcdef", 1).equals("…"), "max=1 只留省略号");
+
+        // emoji 是增补字符，占 2 个 UTF-16 码元：旧实现按 length() 判断会在中间切断。
+        check(WidgetState.truncate(repeat("😀", WidgetState.TITLE_MAX), WidgetState.TITLE_MAX)
+                        .equals(repeat("😀", WidgetState.TITLE_MAX)),
+                "码点数恰好等于上限时不截断");
+        String cut = WidgetState.truncate(repeat("😀", WidgetState.TITLE_MAX + 1),
+                WidgetState.TITLE_MAX);
+        check(cut.codePointCount(0, cut.length()) == WidgetState.TITLE_MAX,
+                "截断后恰好 TITLE_MAX 个码点");
+        check(cut.equals(repeat("😀", WidgetState.TITLE_MAX - 1) + "…"), "emoji 截断补省略号");
+        check(noLoneSurrogate(cut), "截断不产生孤立代理项");
+        check(WidgetState.truncate("a😀bcdef", 4).equals("a😀b…"), "代理对在中间");
+    }
+
+    /** 每个增补字符都必须和它的配对代理项一起出现。 */
+    private static boolean noLoneSurrogate(String value) {
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (!Character.isHighSurrogate(c)) {
+                continue;
+            }
+            if (i + 1 >= value.length() || !Character.isLowSurrogate(value.charAt(i + 1))) {
+                return false;
+            }
+            i++;
+        }
+        return true;
     }
 
     private static void testParsedTruncation() {
@@ -91,10 +123,13 @@ public final class WidgetStateTest {
     }
 
     private static void testColorFormat() {
-        check(WidgetState.parseColor("#FF8FB1") == 0xFF8FB1, "#RRGGBB");
-        check(WidgetState.parseColor("#80FF8FB1") == 0x80FF8FB1, "#AARRGGBB");
-        check(WidgetState.parseColor(" #FF8FB1 ") == 0xFF8FB1, "容忍首尾空白");
-        check(WidgetState.parseColor("#ff8fb1") == 0xff8fb1, "小写十六进制");
+        check(WidgetState.parseColor("#FF8FB1") == 0xFFFF8FB1, "#RRGGBB 补不透明 alpha");
+        check(WidgetState.parseColor("#80FF8FB1") == 0xFFFF8FB1, "8 位形式的 alpha 被忽略");
+        check(WidgetState.parseColor(" #FF8FB1 ") == 0xFFFF8FB1, "容忍首尾空白");
+        check(WidgetState.parseColor("#ff8fb1") == 0xFFFF8FB1, "小写十六进制");
+        check(WidgetState.parseColor("#00000000") == 0xFF000000, "全透明按不透明处理");
+        check(WidgetState.parseColor("#00000000") != WidgetState.NO_COLOR,
+                "全透明不再与 NO_COLOR 碰撞");
         check(WidgetState.parseColor("red") == WidgetState.NO_COLOR, "颜色名非法");
         check(WidgetState.parseColor("#12345") == WidgetState.NO_COLOR, "长度不足");
         check(WidgetState.parseColor("#123456789") == WidgetState.NO_COLOR, "长度过长");
@@ -106,7 +141,7 @@ public final class WidgetStateTest {
     private static void testColorFromJson() {
         WidgetState state = WidgetState.parse("{\"cards\":[{\"value\":\"a\",\"color\":\"#FF8FB1\"},"
                 + "{\"value\":\"b\",\"color\":\"red\"},{\"value\":\"c\"}]}");
-        check(state.cards.get(0).color == 0xFF8FB1, "合法颜色被解析");
+        check(state.cards.get(0).color == 0xFFFF8FB1, "合法颜色被解析为不透明");
         check(state.cards.get(1).color == WidgetState.NO_COLOR, "非法颜色回退主题色");
         check(state.cards.get(2).color == WidgetState.NO_COLOR, "缺省颜色为主题色");
     }
@@ -149,7 +184,7 @@ public final class WidgetStateTest {
         check(parsed.title.equals("今日概览"), "title 往返一致");
         check(parsed.cards.size() == 2, "卡片数量往返一致");
         check(parsed.cards.get(0).value.equals("26°"), "value 往返一致");
-        check(parsed.cards.get(0).color == 0x3DDC84, "color 往返一致");
+        check(parsed.cards.get(0).color == 0xFF3DDC84, "color 往返一致");
         check(parsed.cards.get(1).color == WidgetState.NO_COLOR, "缺省颜色保持为主题色");
         check(original.byteSize() < WidgetState.MAX_BYTES, "常规状态远小于上限");
     }
@@ -173,6 +208,14 @@ public final class WidgetStateTest {
         StringBuilder sb = new StringBuilder(count);
         for (int i = 0; i < count; i++) {
             sb.append(c);
+        }
+        return sb.toString();
+    }
+
+    private static String repeat(String unit, int count) {
+        StringBuilder sb = new StringBuilder(unit.length() * count);
+        for (int i = 0; i < count; i++) {
+            sb.append(unit);
         }
         return sb.toString();
     }

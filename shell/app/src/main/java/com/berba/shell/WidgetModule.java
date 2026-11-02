@@ -74,14 +74,22 @@ final class WidgetModule {
         return result;
     }
 
-    /** 只保留字符串字段；颜色非法时忽略（由 WidgetState 回退主题色）。 */
+    /**
+     * 只保留字符串字段。
+     *
+     * <p>颜色的字符串格式非法（如 "red"）时忽略，由 {@link WidgetState} 回退主题色；
+     * 但传了非字符串（数字/布尔/表）属于调用方 bug，和 title/value/subtitle 一样直接报错。
+     */
     private static LuaTable cardOf(LuaTable card, int index) {
         LuaTable out = new LuaTable();
         out.set("title", stringField(card, "title", index));
         out.set("value", stringField(card, "value", index));
         out.set("subtitle", stringField(card, "subtitle", index));
         LuaValue color = card.get("color");
-        if (color.isstring()) {
+        if (!color.isnil()) {
+            if (!color.isstring()) {
+                throw new LuaError("widget.update 的 cards[" + index + "] 的 color 必须是字符串");
+            }
             out.set("color", color);
         }
         return out;
