@@ -1314,6 +1314,12 @@
     pushStr(L, 'ids');
     lua.lua_newtable(L);
     lua.lua_settable(L, -3);
+    pushStr(L, 'truncated');
+    pushNumber(L, 0);
+    lua.lua_settable(L, -3);
+    pushStr(L, 'rendered');
+    pushBool(L, false);
+    lua.lua_settable(L, -3);
     return 1;
   }
 

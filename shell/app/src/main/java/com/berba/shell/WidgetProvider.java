@@ -35,4 +35,10 @@ public class WidgetProvider extends AppWidgetProvider {
     public void onDeleted(Context context, int[] appWidgetIds) {
         WidgetController.get(context).onDeleted(appWidgetIds);
     }
+
+    /** 最后一个实例被移除：清空缓存，删掉再加回来不再显示旧内容。 */
+    @Override
+    public void onDisabled(Context context) {
+        WidgetController.get(context).onDisabled();
+    }
 }

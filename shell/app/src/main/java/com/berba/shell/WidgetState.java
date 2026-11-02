@@ -64,7 +64,27 @@ final class WidgetState {
     }
 
     int hiddenCardCount() {
-        return cards.size() > ROW_COUNT ? cards.size() - ROW_COUNT : 0;
+        return truncatedCount(cards.size());
+    }
+
+    /**
+     * 超过渲染行数、会被截断的卡片数。
+     *
+     * <p>独立成静态方法：{@code WidgetModule} 要用发送张数计算它，
+     * 而这个计算本身不依赖任何实例状态，JVM 单测可以直接覆盖。
+     */
+    static int truncatedCount(int sent) {
+        return sent > ROW_COUNT ? sent - ROW_COUNT : 0;
+    }
+
+    /**
+     * 实例级缓存键：{@code state:<appWidgetId>}。
+     *
+     * <p>与 {@link #PREFS_KEY}（{@code state}）天然不冲突，所以旧缓存不需要迁移：
+     * 默认内容仍写在 {@code state} 里，实例没有自己的键时回退读它。
+     */
+    static String instanceKey(int appWidgetId) {
+        return PREFS_KEY + ":" + appWidgetId;
     }
 
     int byteSize() {

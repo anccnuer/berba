@@ -18,6 +18,8 @@ public final class WidgetStateTest {
         testByteLimit();
         testRoundTrip();
         testEscapes();
+        testTruncatedCount();
+        testInstanceKey();
         System.out.println("WidgetState OK");
     }
 
@@ -194,6 +196,24 @@ public final class WidgetStateTest {
         check(state.title.equals("a\"b\\c\nd"), "转义字符应被还原: " + state.title);
         WidgetState back = WidgetState.parse(state.toJson());
         check(back.title.equals(state.title), "转义往返一致");
+    }
+
+    /** widget.update 返回给 Lua 的 truncated：发送张数减去渲染行数。 */
+    private static void testTruncatedCount() {
+        check(WidgetState.truncatedCount(0) == 0, "没有卡片不截断");
+        check(WidgetState.truncatedCount(WidgetState.ROW_COUNT) == 0, "恰好渲染满行不截断");
+        check(WidgetState.truncatedCount(WidgetState.ROW_COUNT + 1) == 1, "多 1 张截断 1 张");
+        check(WidgetState.truncatedCount(8) == 3, "发 8 张截断 3 张");
+        check(WidgetState.truncatedCount(WidgetState.MAX_CARDS)
+                        == WidgetState.MAX_CARDS - WidgetState.ROW_COUNT,
+                "上限 20 张截断 15 张");
+    }
+
+    /** 实例缓存键必须与默认键分开，否则旧缓存会被误读。 */
+    private static void testInstanceKey() {
+        check(WidgetState.instanceKey(12).equals("state:12"), "实例键名格式");
+        check(!WidgetState.instanceKey(12).equals(WidgetState.PREFS_KEY), "实例键不与默认键冲突");
+        check(!WidgetState.instanceKey(12).equals(WidgetState.instanceKey(13)), "不同实例键不同");
     }
 
     private static WidgetState stateWithCards(int count) {

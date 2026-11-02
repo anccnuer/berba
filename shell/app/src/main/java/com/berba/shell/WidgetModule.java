@@ -7,6 +7,7 @@ import org.luaj.vm2.LuaTable;
 import org.luaj.vm2.LuaValue;
 import org.luaj.vm2.Varargs;
 
+import java.util.Collections;
 import java.util.List;
 
 /** 安装 widget.*：写缓存、清空与查询实例，不需要前台界面。 */
@@ -29,6 +30,7 @@ final class WidgetModule {
     }
 
     private Varargs update(Varargs args) {
+        Integer targetId = targetInstance(args);
         LuaTable options = args.checktable(1);
         String title = options.get("title").optjstring("");
         LuaValue cardsValue = options.get("cards");
@@ -62,16 +64,43 @@ final class WidgetModule {
                 ? "{\"title\":" + JSONObject.quote(title) + ",\"cards\":[]}"
                 : LuaConvert.toJson(root);
 
+        WidgetState written;
         try {
-            controller.write(json);
+            written = controller.write(json, targetId);
         } catch (RuntimeException e) {
             return LuaApis.nilError(e);
         }
 
+        // 指定 id 时只有该实例会收到这次更新；否则是全部已放置实例。
+        List<Integer> instanceIds = controller.instanceIds();
+        List<Integer> ids = targetId == null
+                ? instanceIds
+                : instanceIds.contains(targetId)
+                        ? Collections.singletonList(targetId)
+                        : Collections.emptyList();
+
         LuaTable result = new LuaTable();
-        result.set("updatedAt", LuaValue.valueOf(controller.state().updatedAt));
-        result.set("ids", idsToLua(controller.instanceIds()));
+        result.set("updatedAt", LuaValue.valueOf(written.updatedAt));
+        result.set("ids", idsToLua(ids));
+        result.set("truncated", LuaValue.valueOf(WidgetState.truncatedCount(cards.length())));
+        result.set("rendered", LuaValue.valueOf(!ids.isEmpty()));
         return result;
+    }
+
+    /** 可选的第二个参数：目标实例 id；不传表示写默认缓存，所有实例一起更新。 */
+    private static Integer targetInstance(Varargs args) {
+        if (args.narg() < 2 || args.arg(2).isnil()) {
+            return null;
+        }
+        LuaValue value = args.arg(2);
+        if (!value.isnumber()) {
+            throw new LuaError("widget.update 的 id 必须是数字");
+        }
+        int id = value.toint();
+        if (id <= 0) {
+            throw new LuaError("widget.update 的 id 必须是正整数");
+        }
+        return id;
     }
 
     /**
@@ -112,13 +141,13 @@ final class WidgetModule {
     }
 
     private Varargs list(Varargs args) {
-        WidgetState state = controller.state();
         List<Integer> ids = controller.instanceIds();
         LuaTable out = new LuaTable();
         for (int i = 0; i < ids.size(); i++) {
+            int id = ids.get(i);
             LuaTable item = new LuaTable();
-            item.set("id", LuaValue.valueOf(ids.get(i)));
-            item.set("updatedAt", LuaValue.valueOf(state.updatedAt));
+            item.set("id", LuaValue.valueOf(id));
+            item.set("updatedAt", LuaValue.valueOf(controller.stateFor(id).updatedAt));
             out.set(i + 1, item);
         }
         return out;

@@ -161,6 +161,8 @@ final class RuntimeManager {
             for (WidgetController.Click click : clicks) {
                 LuaTable event = new LuaTable();
                 event.set("id", LuaValue.valueOf(click.id));
+                // index 始终设置：整块点击为 -1，行点击为 0..ROW_COUNT-1，Lua 侧不用判空。
+                event.set("index", LuaValue.valueOf(click.index));
                 event.set("coldStart", LuaValue.valueOf(click.coldStart));
                 rt.dispatchEvent("widget", new LuaValue[]{event});
             }
