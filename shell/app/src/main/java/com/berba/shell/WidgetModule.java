@@ -64,26 +64,33 @@ final class WidgetModule {
                 ? "{\"title\":" + JSONObject.quote(title) + ",\"cards\":[]}"
                 : LuaConvert.toJson(root);
 
-        WidgetState written;
-        try {
-            written = controller.write(json, targetId);
-        } catch (RuntimeException e) {
-            return LuaApis.nilError(e);
+        // 指定 id 时只有该实例会收到这次更新；目标不存在时什么都不写，
+        // 免得留下永远不会被读到的 state:<id> 垃圾键。
+        List<Integer> instanceIds = controller.instanceIds();
+        boolean exists = targetId == null || instanceIds.contains(targetId);
+
+        WidgetState written = null;
+        if (exists) {
+            try {
+                written = controller.write(json, targetId);
+            } catch (RuntimeException e) {
+                return LuaApis.nilError(e);
+            }
         }
 
-        // 指定 id 时只有该实例会收到这次更新；否则是全部已放置实例。
-        List<Integer> instanceIds = controller.instanceIds();
-        List<Integer> ids = targetId == null
-                ? instanceIds
-                : instanceIds.contains(targetId)
-                        ? Collections.singletonList(targetId)
-                        : Collections.emptyList();
+        List<Integer> ids = Collections.emptyList();
+        if (exists) {
+            ids = targetId == null ? instanceIds : Collections.singletonList(targetId);
+        }
 
         LuaTable result = new LuaTable();
-        result.set("updatedAt", LuaValue.valueOf(written.updatedAt));
+        result.set("updatedAt", LuaValue.valueOf(written == null ? 0L : written.updatedAt));
         result.set("ids", idsToLua(ids));
         result.set("truncated", LuaValue.valueOf(WidgetState.truncatedCount(cards.length())));
-        result.set("rendered", LuaValue.valueOf(!ids.isEmpty()));
+        // 全局更新但桌面上还没有实例时仍会写缓存，但没有任何实例被渲染，
+        // rendered 必须是 false（与 widget.update 文档一致）。
+        boolean rendered = targetId == null ? !instanceIds.isEmpty() : exists;
+        result.set("rendered", LuaValue.valueOf(rendered));
         return result;
     }
 

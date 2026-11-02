@@ -27,7 +27,7 @@ function formatTime(ms) {
   return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-/** 渲染与设备小组件一致的卡片内容（桌面侧只做文本 + 颜色）。 */
+/** 渲染与设备小组件一致的卡片内容（桌面侧只做文本 + 颜色，单行省略）。 */
 function renderCards(sample) {
   const list = Array.isArray(sample) ? sample : (sample && sample.sample) || [];
   cards.innerHTML = '';
@@ -37,25 +37,23 @@ function renderCards(sample) {
     const label = document.createElement('span');
     label.className = 'card-label';
     label.textContent = card.title || '';
+    // 与桌面布局一致：标题在左，右边 value 和 subtitle 上下两行，避免长文本被省略。
+    const body = document.createElement('div');
+    body.className = 'card-body';
     const value = document.createElement('strong');
     value.className = 'card-value';
     value.textContent = card.value || '';
     if (card.color) value.style.color = card.color;
-    li.append(label, value);
+    body.append(value);
     if (card.subtitle) {
-      const sub = document.createElement('span');
-      sub.className = 'card-sub';
-      sub.textContent = card.subtitle;
-      li.append(sub);
+      const subtitle = document.createElement('span');
+      subtitle.className = 'card-subtitle';
+      subtitle.textContent = card.subtitle;
+      body.append(subtitle);
     }
+    li.append(label, body);
     cards.append(li);
   });
-  if (list.length > 5) {
-    const extra = document.createElement('li');
-    extra.className = 'card extra';
-    extra.textContent = `还有 ${list.length - 5} 张卡片未渲染`;
-    cards.append(extra);
-  }
 }
 
 async function refresh() {

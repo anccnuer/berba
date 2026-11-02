@@ -108,6 +108,8 @@ berba 的 CI 无法连接真机，因此采用**自动化产物校验 + 人工 s
 ### 13. 桌面小组件（`widget` 能力）
 - [ ] `app.json` 写 `"capabilities": ["widget", "task"]` 后构建成功；`aapt2 dump xmltree --file AndroidManifest.xml` 含 `com.berba.shell.WidgetProvider`（`exported="false"`）、`android.appwidget.action.APPWIDGET_UPDATE` 与 `android.appwidget.provider`；`aapt2 dump resources` 含 `layout/berba_widget`、`xml/berba_widget_info`、`drawable/berba_widget_bg`、`drawable/berba_widget_card` 与 5 档 `berba_widget_preview`；Activity 为 `launchMode="singleTask"`。
 - [ ] 未启用 `widget` 时构建产物不含 `WidgetProvider`、`appwidget` 或任何 `berba_widget*` 资源（`go test ./internal/build ./internal/manifest` 已覆盖）。
+- [ ] 长按桌面进入「微件」，`Widget 示例` 的预览图是竖版 4×3，包含标题、时间和 5 行卡片示意，不是旧版宽条；应用内预览的宽高比与桌面实例一致。
+- [ ] 卡片左侧显示标题，右侧 value 与 subtitle 分上下两行；长 subtitle 不会挤占 value 的宽度，两行文本都完整可读（单行本身超宽时才省略）。
 - [ ] 长按桌面添加小组件，卡片显示 Lua 写入的内容；同一应用添加两个实例时各自显示各自缓存的内容，点击事件 `id` 不同。
 - [ ] `widget.update({...})` 后所有实例一起更新；`widget.update({...}, id)` 只更新该实例，其他实例内容与 `updatedAt` 不变（`widget.list()` 按实例各自取值）。
 - [ ] `widget.update` 返回 `truncated`（发送 8 张 → `3`）与 `rendered`；`ids` 只列收到这次更新的实例。
@@ -121,7 +123,7 @@ berba 的 CI 无法连接真机，因此采用**自动化产物校验 + 人工 s
 - [ ] `task`（`every=900`）触发后调用 `widget.update`：桌面内容随之刷新，无需手动打开应用。
 - [ ] `am force-stop` 后小组件仍显示最后一次缓存（`WidgetProvider.onUpdate` 只读 `SharedPreferences`，不启动 Lua）；重新打开应用后内容不变。
 - [ ] 重启设备、launcher 重启、应用更新后小组件仍显示缓存（旧版本的单键 `state` 缓存升级后直接作为默认缓存生效，无需迁移）。
-- [ ] 删除最后一个实例后缓存被清空（`WidgetProvider.onDisabled`）：重新添加显示占位，需要再 `widget.update`。
+- [ ] 删除最后一个实例后缓存保留（`WidgetProvider.onDisabled`）：重新添加先显示最后一次内容与时间戳，无需打开应用；随后应用启动或 `widget.update` 正常刷新。
 - [ ] 带 emoji 的 `title`/`value`/`subtitle` 截断后不出现 ``（按 Unicode 码点计数，emoji 算 1 个）。
 - [ ] `cards[i].color` 传 `#RRGGBB` 时文字确实可见（一律不透明），传 `#AARRGGBB` 同样可见。
 - [ ] Doze（`adb shell dumpsys deviceidle force-idle`）下 `task` 触发延迟或被延后，但小组件内容与文档所述 best-effort 语义一致，不崩溃。

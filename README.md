@@ -62,6 +62,13 @@ cd myapp
   <img src="examples/hello/运行截图/03-counter.png" width="220" alt="Lua 持久化计数">
 </p>
 
+`examples/widget` 把同一套路用到桌面小组件：Lua 算出卡片，`widget.update` 推到桌面，页面用同样的比例显示预览，刷新时回报截断的张数。
+
+<p align="center">
+  <img src="examples/widget/运行截图/01-page.png" width="220" alt="页面显示与桌面一致的小组件预览">
+  <img src="examples/widget/运行截图/02-widget.png" width="220" alt="桌面小组件渲染 Lua 推送的卡片">
+</p>
+
 ## 示例
 
 | 示例 | 内容 |

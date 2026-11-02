@@ -104,11 +104,19 @@ func TestWidgetInfoXML(t *testing.T) {
 	if attrs["widgetCategory"] != "home_screen" {
 		t.Fatalf("widgetCategory = %q", attrs["widgetCategory"])
 	}
-	if attrs["minWidth"] != "250dp" || attrs["minHeight"] != "110dp" {
+	if attrs["minWidth"] != "250dp" || attrs["minHeight"] != "150dp" {
 		t.Fatalf("min size = %q x %q", attrs["minWidth"], attrs["minHeight"])
+	}
+	// 五行卡片需要 4x3 的默认尺寸；targetCell 1x1 会让新添加的小组件只剩一格。
+	if attrs["targetCellWidth"] != "4" || attrs["targetCellHeight"] != "3" {
+		t.Fatalf("target cells = %q x %q", attrs["targetCellWidth"], attrs["targetCellHeight"])
 	}
 	if attrs["previewImage"] != "@drawable/berba_widget_preview" {
 		t.Fatalf("previewImage = %q", attrs["previewImage"])
+	}
+	// 初始布局的文本都是 gone，直接当 previewLayout 会显示空白。
+	if _, ok := attrs["previewLayout"]; ok {
+		t.Fatalf("不应设置 previewLayout（会覆盖 previewImage 并显示空白）: %s", data)
 	}
 }
 
@@ -132,21 +140,21 @@ func TestWidgetLayoutHasFiveRows(t *testing.T) {
 			t.Fatalf("layout missing %s:\n%s", want, out)
 		}
 	}
-	// 固定 5 个行槽位：根布局 + 5 行 LinearLayout。
-	if got := strings.Count(out, "<LinearLayout"); got != widgetRowCount+1 {
-		t.Fatalf("LinearLayout count = %d, want %d\n%s", got, widgetRowCount+1, out)
+	// 固定 5 个行槽位：根布局 + 5 行 LinearLayout + 每行右侧的 value/subtitle 容器。
+	if got := strings.Count(out, "<LinearLayout"); got != widgetRowCount*2+1 {
+		t.Fatalf("LinearLayout count = %d, want %d\n%s", got, widgetRowCount*2+1, out)
 	}
 	for i := 0; i < widgetRowCount; i++ {
 		row := fmt.Sprintf("widget_row%d", i)
-		for _, suffix := range []string{"", "_title", "_value"} {
+		for _, suffix := range []string{"", "_title", "_value", "_subtitle"} {
 			id := fmt.Sprintf(`android:id="@+id/%s%s"`, row, suffix)
 			if !strings.Contains(out, id) {
 				t.Fatalf("layout missing %s:\n%s", id, out)
 			}
 		}
 	}
-	if got := strings.Count(out, `@+id/widget_row`); got != widgetRowCount*3 {
-		t.Fatalf("row slot ids = %d, want %d\n%s", got, widgetRowCount*3, out)
+	if got := strings.Count(out, `@+id/widget_row`); got != widgetRowCount*4 {
+		t.Fatalf("row slot ids = %d, want %d\n%s", got, widgetRowCount*4, out)
 	}
 	// visibility 是枚举属性：写错值会在 aapt2 链接期直接失败。
 	for _, line := range strings.Split(out, "\n") {
@@ -161,6 +169,52 @@ func TestWidgetLayoutHasFiveRows(t *testing.T) {
 		}
 		t.Fatalf("visibility 取值非法: %q\n%s", rest, out)
 	}
+	// 回归：widget_title / widget_updated 是纵向根布局的直接子节点。
+	// 给它们加 layout_weight 会分到纵向剩余高度，两行各吸走一半空间变成空盒子，
+	// 卡片被挤到下面——真机上看到的就是「标题位置一大块空白」。
+	// 只有横向行里的 title/value 才需要 0dp + weight=1 平分宽度。
+	for _, id := range []string{"widget_title", "widget_updated"} {
+		block := widgetTextViewBlock(t, out, id)
+		if strings.Contains(block, "layout_weight") {
+			t.Fatalf("%s 是纵向根布局子节点，不应带 layout_weight:\n%s", id, block)
+		}
+		if !strings.Contains(block, `android:layout_width="match_parent"`) {
+			t.Fatalf("%s 应使用 match_parent 宽度:\n%s", id, block)
+		}
+	}
+	// 行标题固定 54dp；value/subtitle 共用右侧剩余宽度，但各自占一行。
+	if got := strings.Count(out, `android:layout_weight="1"`); got != widgetRowCount {
+		t.Fatalf("row body weight count = %d, want %d\n%s", got, widgetRowCount, out)
+	}
+	for i := 0; i < widgetRowCount; i++ {
+		titleBlock := widgetTextViewBlock(t, out, fmt.Sprintf("widget_row%d_title", i))
+		if !strings.Contains(titleBlock, `android:layout_width="54dp"`) ||
+			strings.Contains(titleBlock, "layout_weight") {
+			t.Fatalf("widget_row%d_title 应固定 54dp 且不带 weight:\n%s", i, titleBlock)
+		}
+		for _, suffix := range []string{"_value", "_subtitle"} {
+			block := widgetTextViewBlock(t, out, fmt.Sprintf("widget_row%d%s", i, suffix))
+			if !strings.Contains(block, `android:layout_width="match_parent"`) ||
+				strings.Contains(block, "layout_weight") {
+				t.Fatalf("widget_row%d%s 应使用 match_parent 且不带 weight:\n%s", i, suffix, block)
+			}
+		}
+	}
+}
+
+// widgetTextViewBlock 取出指定 id 的 <TextView>…</TextView> 片段，便于逐属性断言。
+func widgetTextViewBlock(t *testing.T, layout, id string) string {
+	t.Helper()
+	marker := fmt.Sprintf(`android:id="@+id/%s"`, id)
+	start := strings.Index(layout, marker)
+	if start < 0 {
+		t.Fatalf("layout 里没有 %s\n%s", id, layout)
+	}
+	end := strings.Index(layout[start:], "</TextView>")
+	if end < 0 {
+		t.Fatalf("%s 的 TextView 没有闭合\n%s", id, layout)
+	}
+	return layout[start : start+end]
 }
 
 // visibilityAllowed 校验 visibility 取值是枚举成员（`rest` 形如 `gone"`）。
@@ -213,6 +267,17 @@ func TestWidgetPreviewSizes(t *testing.T) {
 		if b := img.Bounds(); b.Dx() != d.W || b.Dy() != d.H {
 			t.Fatalf("%s: got %dx%d, want %dx%d", d.Name, b.Dx(), b.Dy(), d.W, d.H)
 		}
+	}
+}
+
+func TestParseColorKeepsAlpha(t *testing.T) {
+	card := parseColor("#1AFFFFFF")
+	if card.A != 0x1A || card.R != 0xFF || card.G != 0xFF || card.B != 0xFF {
+		t.Fatalf("parseColor(#1AFFFFFF) = %+v, want alpha 0x1A and white", card)
+	}
+	opaque := parseColor("#3A3A3C")
+	if opaque.A != 0xFF {
+		t.Fatalf("parseColor(#3A3A3C).A = %#x, want 0xFF", opaque.A)
 	}
 }
 

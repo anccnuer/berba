@@ -36,7 +36,7 @@ public class WidgetProvider extends AppWidgetProvider {
         WidgetController.get(context).onDeleted(appWidgetIds);
     }
 
-    /** 最后一个实例被移除：清空缓存，删掉再加回来不再显示旧内容。 */
+    /** 最后一个实例被移除：保留最后一次内容，重新添加时直接显示。 */
     @Override
     public void onDisabled(Context context) {
         WidgetController.get(context).onDisabled();

@@ -84,6 +84,13 @@ final class LuaConvert {
             sb.append("null");
         } else if (v.isboolean()) {
             sb.append(v.toboolean() ? "true" : "false");
+        } else if (v.type() == LuaValue.TSTRING) {
+            // 必须按真实类型判，不能用 isstring()/isnumber() 这组谓词：LuaJ 沿袭 Lua 语义，
+            // 纯数字的字符串（如 tostring(1234)）isnumber() 与 isint() 都返回 true，
+            // 而数字的 isstring() 也返回 true —— 两个方向都会误判。
+            // 先判 isint() 会让纯数字字符串被静默编码成 JSON 数字，
+            // widget.update 的 value = tostring(6344) 就是这样丢掉引号、进而被缓存校验拒绝的。
+            sb.append(JSONObject.quote(v.tojstring()));
         } else if (v.isint()) {
             sb.append(v.toint());
         } else if (v.isnumber()) {
@@ -93,8 +100,6 @@ final class LuaConvert {
             } else {
                 sb.append(d);
             }
-        } else if (v.isstring()) {
-            sb.append(JSONObject.quote(v.tojstring()));
         } else if (v.istable()) {
             LuaTable t = v.checktable();
             if (!path.add(t)) {

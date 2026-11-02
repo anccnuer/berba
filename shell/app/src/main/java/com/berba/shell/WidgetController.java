@@ -149,13 +149,13 @@ final class WidgetController {
     }
 
     /**
-     * 读指定键的缓存。原文存在但解析失败时记日志并删掉坏键：否则损坏的缓存会
-     * 让小组件永远渲染空白，而且没有任何线索可查。损坏返回 null，由调用方决定回退策略。
+     * 读指定键的缓存。键不存在返回 null；原文存在但解析失败时记日志并删掉坏键，同样返回 null。
+     * 「不存在」与「存在但为空」必须区分开，否则 stateFor 无法回退到默认缓存。
      */
     private WidgetState readState(String key) {
         String raw = prefs.getString(key, null);
         if (raw == null || raw.isEmpty()) {
-            return WidgetState.empty();
+            return null;
         }
         WidgetState parsed = WidgetState.parseOrNull(raw);
         if (parsed == null) {
@@ -224,10 +224,36 @@ final class WidgetController {
         render(context);
     }
 
-    /** 最后一个实例被移除：清空缓存，删掉再加回来不再显示旧内容。 */
+    /**
+     * 最后一个实例被移除：保留最后一次内容，重新添加时 onUpdate 直接渲染，
+     * 不必等应用启动或 Lua 再次推送。
+     *
+     * <p>实例 id 已经失效，顺手清掉实例级缓存；如果内容只写过实例缓存
+     * （{@code widget.update(opts, id)}），把其中最新的状态提升为默认缓存，
+     * 保证新实例也能读到。
+     */
     void onDisabled() {
-        Log.i(TAG, "所有小组件实例已移除，清空缓存");
-        clear();
+        WidgetState shared = readState(WidgetState.PREFS_KEY);
+        long newestAt = shared == null ? 0L : shared.updatedAt;
+        String newestJson = null;
+        SharedPreferences.Editor editor = prefs.edit();
+        for (Map.Entry<String, ?> entry : prefs.getAll().entrySet()) {
+            String key = entry.getKey();
+            if (!key.startsWith(WidgetState.PREFS_KEY + ":")) {
+                continue;
+            }
+            WidgetState state = readState(key);
+            if (state != null && state.updatedAt > newestAt) {
+                newestAt = state.updatedAt;
+                newestJson = state.toJson();
+            }
+            editor.remove(key);
+        }
+        if (newestJson != null) {
+            editor.putString(WidgetState.PREFS_KEY, newestJson);
+        }
+        editor.apply();
+        Log.i(TAG, "所有小组件实例已移除，保留最后一次内容（updatedAt=" + newestAt + "）");
     }
 
     /** AppWidgetManager.updateAppWidget 可在任意线程调用，统一 post 到主线程。 */
@@ -289,10 +315,28 @@ final class WidgetController {
             views.setViewVisibility(rowId, View.VISIBLE);
             int titleTextId = resourceId("id", row + "_title");
             int valueTextId = resourceId("id", row + "_value");
-            views.setTextViewText(titleTextId, card.title);
-            views.setTextViewText(valueTextId, valueText(card));
-            int color = card.color == WidgetState.NO_COLOR ? THEME_VALUE_COLOR : card.color;
-            views.setTextColor(valueTextId, color);
+            int subtitleTextId = resourceId("id", row + "_subtitle");
+
+            boolean hasCardTitle = !card.title.isEmpty();
+            views.setViewVisibility(titleTextId, hasCardTitle ? View.VISIBLE : View.GONE);
+            if (hasCardTitle) {
+                views.setTextViewText(titleTextId, card.title);
+            }
+
+            // value 和 subtitle 分两行，长文本只在各自行内省略，不再互相挤占宽度。
+            boolean hasValue = !card.value.isEmpty();
+            views.setViewVisibility(valueTextId, hasValue ? View.VISIBLE : View.GONE);
+            if (hasValue) {
+                views.setTextViewText(valueTextId, card.value);
+                int color = card.color == WidgetState.NO_COLOR ? THEME_VALUE_COLOR : card.color;
+                views.setTextColor(valueTextId, color);
+            }
+
+            boolean hasSubtitle = !card.subtitle.isEmpty();
+            views.setViewVisibility(subtitleTextId, hasSubtitle ? View.VISIBLE : View.GONE);
+            if (hasSubtitle) {
+                views.setTextViewText(subtitleTextId, card.subtitle);
+            }
             setRowClick(ctx, views, rowId, appWidgetId, i);
         }
 
@@ -324,14 +368,6 @@ final class WidgetController {
                 ROW_REQUEST_BASE + appWidgetId * WidgetState.ROW_COUNT + index, intent,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         views.setOnClickPendingIntent(rowId, pending);
-    }
-
-    /** value 为主文本，subtitle 追加在后；布局 maxLines=1 时超出部分由系统省略。 */
-    private static String valueText(WidgetState.Card card) {
-        if (card.subtitle.isEmpty()) {
-            return card.value;
-        }
-        return card.value.isEmpty() ? card.subtitle : card.value + " · " + card.subtitle;
     }
 
     private static String formatTime(long epochMillis) {

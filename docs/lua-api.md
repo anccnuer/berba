@@ -383,7 +383,7 @@ widget.clear()
 
 - `updatePeriodMillis = 0`：系统不会周期性唤醒应用。需要定时刷新时用 `task`（`every` ≥ 900 秒），在 `app.on("task")` 里调用 `widget.update`；文档不承诺秒级刷新，Doze 与厂商省电策略下可能延迟。
 - 进程被回收、launcher 重启、应用更新后，`WidgetProvider.onUpdate` 只读 `SharedPreferences` 缓存渲染，**不启动 Lua**，因此最后一次内容仍会显示。
-- 删除最后一个实例时 `WidgetProvider.onDisabled` 会清空缓存：重新添加显示占位，需要再调用 `widget.update`。
+- 删除最后一个实例时 `WidgetProvider.onDisabled` **不会清空缓存**：重新添加会先显示最后一次内容（`updatedAt` 保留），之后由应用启动或 `widget.update` 刷新。需要主动显示占位时调用 `widget.clear()`。
 - RemoteViews 只能使用框架控件与固定槽位：v1 不支持图片/图表、可滚动列表、`android:configure` 配置页与 Android 12 响应式尺寸档位；卡片只做文本 + 颜色。
 - 构建期固定的资源名统一为 `berba_widget*` 前缀，自定义 `www/` 或 `lua/` 不要使用该前缀。
 

@@ -65,35 +65,42 @@ code {
 }
 
 .widget-frame {
-  padding: 16px;
-  border-radius: 14px;
+  box-sizing: border-box;
+  /* 与 5x5 桌面网格里 4x3 小组件的实际尺寸（515x780）一致，避免预览比例失真。 */
+  width: min(100%, 72vw);
+  aspect-ratio: 515 / 780;
+  margin: 0 auto;
+  padding: 8px;
+  border-radius: 12px;
   background: #3A3A3C;
+  overflow: hidden;
 }
 
 .widget-title {
   color: #b3b3b3;
   font-size: 16px;
   font-weight: 700;
+  line-height: 1.2;
 }
 
 .widget-updated {
-  margin: 2px 0 10px;
+  margin: 2px 0 0;
   color: #8a8a8a;
   font-size: 11px;
+  line-height: 1.2;
 }
 
 .widget-cards {
-  margin: 0;
+  margin: 6px 0 0;
   padding: 0;
   list-style: none;
 }
 
 .card {
   display: flex;
-  align-items: baseline;
-  gap: 10px;
+  align-items: center;
   margin-bottom: 6px;
-  padding: 8px 10px;
+  padding: 4px;
   border-radius: 8px;
   background: rgb(255 255 255 / 10%);
   color: #fff;
@@ -101,32 +108,47 @@ code {
 }
 
 .card-label {
+  flex: 0 0 54px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: #b3b3b3;
-  min-width: 52px;
+  font-weight: 700;
+}
+
+.card-body {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .card-value {
-  font-size: 22px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 20px;
   font-weight: 700;
-  flex: 1;
+  line-height: 1.2;
 }
 
-.card-sub {
-  color: #8a8a8a;
+.card-subtitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #b3b3b3;
   font-size: 11px;
+  line-height: 1.2;
 }
 
-.card.extra {
-  background: transparent;
-  color: #8a8a8a;
-  font-size: 11px;
-  padding-left: 4px;
-}
-
-.widget-hint {
+.preview-note {
   margin: 10px 0 0;
-  color: #8a8a8a;
-  font-size: 11px;
+  color: #57606a;
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .actions {
