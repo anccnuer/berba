@@ -108,19 +108,25 @@ berba 的 CI 无法连接真机，因此采用**自动化产物校验 + 人工 s
 ### 13. 桌面小组件（`widget` 能力）
 - [ ] `app.json` 写 `"capabilities": ["widget", "task"]` 后构建成功；`aapt2 dump xmltree --file AndroidManifest.xml` 含 `com.berba.shell.WidgetProvider`（`exported="false"`）、`android.appwidget.action.APPWIDGET_UPDATE` 与 `android.appwidget.provider`；`aapt2 dump resources` 含 `layout/berba_widget`、`xml/berba_widget_info`、`drawable/berba_widget_bg`、`drawable/berba_widget_card` 与 5 档 `berba_widget_preview`；Activity 为 `launchMode="singleTask"`。
 - [ ] 未启用 `widget` 时构建产物不含 `WidgetProvider`、`appwidget` 或任何 `berba_widget*` 资源（`go test ./internal/build ./internal/manifest` 已覆盖）。
-- [ ] 长按桌面添加小组件，卡片显示 Lua 写入的内容；同一应用添加两个实例时各自独立渲染、点击事件 `id` 不同。
+- [ ] 长按桌面添加小组件，卡片显示 Lua 写入的内容；同一应用添加两个实例时各自显示各自缓存的内容，点击事件 `id` 不同。
+- [ ] `widget.update({...})` 后所有实例一起更新；`widget.update({...}, id)` 只更新该实例，其他实例内容与 `updatedAt` 不变（`widget.list()` 按实例各自取值）。
+- [ ] `widget.update` 返回 `truncated`（发送 8 张 → `3`）与 `rendered`；`ids` 只列收到这次更新的实例。
 - [ ] `widget.update` 后桌面立即更新；`widget.clear()` 后显示占位（无数据状态），再次 `update` 恢复。
-- [ ] `widget.update` 传入非法参数（`cards` 不是数组、卡片字段不是字符串、超过 20 张）返回 `nil, "中文错误"`，不崩溃。
-- [ ] `widget.list()` 返回已放置实例的 `{ id, updatedAt }`；无实例时为空表（经桥编码为 `{}`，前端用 `Array.isArray` 判断）。
-- [ ] 无小组件实例时调用 `widget.update`：只写缓存并返回 `ids = {}`，不报错。
-- [ ] 冷启动点击小组件：`create` 先执行，随后收到 `app.on("widget")` 的 `{ id, coldStart=true }`，且只触发一次。
-- [ ] 热启动点击小组件：立即收到 `coldStart=false` 的 `widget` 事件；旋转屏幕不会重复触发。
+- [ ] `widget.update` 传入非法参数（`cards` 不是数组、卡片字段不是字符串、`color` 传数字、`id` 传字符串或非正数、超过 20 张）返回 `nil, "中文错误"`，不崩溃。
+- [ ] `widget.list()` 返回已放置实例的 `{ id, updatedAt }`（各自缓存时间）；无实例时为空表（经桥编码为 `{}`，前端用 `Array.isArray` 判断）。
+- [ ] 无小组件实例时调用 `widget.update`：只写缓存并返回 `ids = {}`、`rendered = false`，不报错。
+- [ ] 冷启动点击小组件：`create` 先执行，随后收到 `app.on("widget")` 的 `{ id, index = -1, coldStart = true }`，且只触发一次。
+- [ ] 热启动点击小组件：立即收到 `coldStart = false` 的 `widget` 事件；旋转屏幕不会重复触发。
+- [ ] 点某一行卡片只收到该行的 `widget` 事件（`index` 为该行 0..4），点别的行收到别的 `index`，点卡片之间的空白处收到 `index = -1`。
 - [ ] `task`（`every=900`）触发后调用 `widget.update`：桌面内容随之刷新，无需手动打开应用。
 - [ ] `am force-stop` 后小组件仍显示最后一次缓存（`WidgetProvider.onUpdate` 只读 `SharedPreferences`，不启动 Lua）；重新打开应用后内容不变。
-- [ ] 重启设备、launcher 重启、应用更新后小组件仍显示缓存；删除实例后不再渲染该 id。
+- [ ] 重启设备、launcher 重启、应用更新后小组件仍显示缓存（旧版本的单键 `state` 缓存升级后直接作为默认缓存生效，无需迁移）。
+- [ ] 删除最后一个实例后缓存被清空（`WidgetProvider.onDisabled`）：重新添加显示占位，需要再 `widget.update`。
+- [ ] 带 emoji 的 `title`/`value`/`subtitle` 截断后不出现 ``（按 Unicode 码点计数，emoji 算 1 个）。
+- [ ] `cards[i].color` 传 `#RRGGBB` 时文字确实可见（一律不透明），传 `#AARRGGBB` 同样可见。
 - [ ] Doze（`adb shell dumpsys deviceidle force-idle`）下 `task` 触发延迟或被延后，但小组件内容与文档所述 best-effort 语义一致，不崩溃。
 - [ ] 深色模式与系统字体放大（>1.3x）下文本仍可读、不溢出；超长文本被截断为 `…`。
-- [ ] 浏览器 dev 下 `widget.update`/`widget.clear`/`widget.list` 打印桩提示并返回模拟时间戳/空表；`app.on("widget")` 可注册但不会自动触发。
+- [ ] 浏览器 dev 下 `widget.update`/`widget.clear`/`widget.list` 打印桩提示并返回模拟时间戳/空表（`update` 还带 `truncated = 0`、`rendered = false`）；`app.on("widget")` 可注册但不会自动触发。
 
 ## 自动化覆盖（无需真机）
 
@@ -134,7 +140,8 @@ berba 的 CI 无法连接真机，因此采用**自动化产物校验 + 人工 s
 | 通知能力产物 | `go test ./internal/build ./internal/resources`：Manifest 权限、`ic_stat_berba.png` 各密度尺寸、能力资产包含 `notify` |
 | 任务能力产物 | `go test ./internal/build`：Manifest 权限/组件、`shell.json` 支持 `task`、能力资产含 `task` 模块与 `app.task` 事件、未启用时不出现任务组件 |
 | widget 能力产物 | `go test ./internal/resources ./internal/manifest ./internal/build`：布局 5 行槽位与 `visibility` 枚举取值、`berba_widget_info` 的 `minWidth/updatePeriodMillis/widgetCategory`、Manifest 组件与 `singleTask`、`res/` 下的 `layout/xml/drawable` 产物、能力资产含 `widget` 模块与 `app.widget` 事件；两次生成逐字节一致 |
-| dev 能力元数据 | `go test ./internal/cli ./internal/devserver`：`/__berba/lua.json` 的 `capabilities`/`modules`/`events`/`native` 与 `app.json` 一致；未知能力与缺失 `spec.json` 直接报错 || 原生插件产物 | `go test ./internal/nativeplugin ./internal/build ./internal/release`：规格/路径/ABI 交集/ELF fixtures（架构、对齐、导出符号、依赖白名单）、无插件不含 `lib/`、缺 shim 构建失败、发行包含 `include/berba_plugin.h` 与 shim 哈希 |
+| dev 能力元数据 | `go test ./internal/cli ./internal/devserver`：`/__berba/lua.json` 的 `capabilities`/`modules`/`events`/`native` 与 `app.json` 一致；未知能力与缺失 `spec.json` 直接报错 |
+| 原生插件产物 | `go test ./internal/nativeplugin ./internal/build ./internal/release`：规格/路径/ABI 交集/ELF fixtures（架构、对齐、导出符号、依赖白名单）、无插件不含 `lib/`、缺 shim 构建失败、发行包含 `include/berba_plugin.h` 与 shim 哈希 |
 | 原生 shim 构建 | CI 固定 NDK `26.1.10909125`，`scripts/build-shell.sh` 产出三 ABI `libberba_jni.so`，用 `llvm-readelf` 断言架构、仅导出 `JNI_OnLoad`、`PT_LOAD` 对齐与依赖白名单；`examples/native-echo/build.sh` 编译示例插件并打包成 APK（加载验证见手动设备清单） |
 | 产物内容 | 解包断言 `assets/www`、`assets/lua`、`app_config.json` 与 `.sha256` 一致 |
 | 可复现 | CI 连续构建两次比对 SHA-256 |

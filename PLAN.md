@@ -59,7 +59,10 @@ v0.20 已发布（tag `v0.20`，CI 全绿）。已完成的能力与契约：
 
 ### 小组件状态（壳内持久化）
 
-写在 `SharedPreferences("berba_widget")` 的 `state` 键，供 `WidgetProvider` 在没有 Lua 时渲染：
+写在 `SharedPreferences("berba_widget")`，供 `WidgetProvider` 在没有 Lua 时渲染：
+
+- 默认键 `state`：所有没有自己缓存的实例都回退读它。
+- 实例键 `state:<appWidgetId>`：`widget.update(opts, id)` 写这里；`widget.update(opts)` 仍写默认键。
 
 ```json
 {
@@ -71,9 +74,9 @@ v0.20 已发布（tag `v0.20`，CI 全绿）。已完成的能力与契约：
 }
 ```
 
-- 上限：序列化后 ≤ 32KB、最多 20 张卡；**渲染固定 5 行**，多余的截断并记日志。
-- 字符串截断：`title` ≤ 24、`value` ≤ 16、`subtitle` ≤ 32（超出补 `…`）。
-- `color` 为 `#RRGGBB`/`#AARRGGBB`，非法时忽略并回退主题色。
+- 上限：单份序列化后 ≤ 32KB、最多 20 张卡；**渲染固定 5 行**，多余的截断并记日志。
+- 字符串截断按 Unicode 码点计数（`title` ≤ 24、`value` ≤ 16、`subtitle` ≤ 32，超出补 `…`），避免 emoji 等增补字符被从中间切断产生孤立代理项。
+- `color` 为 `#RRGGBB`/`#AARRGGBB`，只取 RGB、alpha 一律按不透明处理（`setTextColor(int)` 按 ARGB 解释，不补 alpha 时 `#RRGGBB` 会被当成全透明、文字看不见）；格式非法时忽略并回退主题色。
 
 ### Lua API
 
@@ -85,17 +88,20 @@ local res, err = widget.update({
     { title = "步数", value = "8,421", subtitle = "目标 10,000", color = "#3DDC84" },
   },
 })
--- res = { updatedAt = 1761800000000, ids = { 12, 15 } }
+-- res = { updatedAt = 1761800000000, ids = { 12, 15 }, truncated = 0, rendered = true }
 
-local list = widget.list()   -- { { id = 12, updatedAt = ... }, ... }
+widget.update({ title = "只看这个实例", cards = collect() }, 12)
+local list = widget.list()   -- { { id = 12, updatedAt = ... }, ... }（各自缓存时间）
 widget.clear()
 
 app.on("widget", function(ev)
-  -- ev.id / ev.coldStart
+  -- ev.id / ev.index（0 起，整块点击为 -1）/ ev.coldStart
 end)
 ```
 
-- `widget.update` 无实例时只写缓存并返回 `ids = {}`，不报错。
+- `widget.update` 无实例时只写缓存并返回 `ids = {}`、`rendered = false`，不报错。
+- `widget.update` 返回 `truncated`（超出 5 行被截断的卡片数），调用方不必猜「发了 8 张为什么只显示 5 行」。
+- 删除最后一个实例时 `WidgetProvider.onDisabled` 清空缓存，删掉再加回来不再显示旧内容。
 - 参数非法返回 `nil, "中文错误"`，与 `notify`/`task` 风格一致。
 
 ---

@@ -65,7 +65,7 @@ async function refresh() {
   title.textContent = '今日概览';
   updated.textContent = formatTime(cached.updatedAt);
   renderCards(cached);
-  status.textContent = `已推送 ${cached.count || 0} 张卡片 · ${formatTime(cached.updatedAt)}`;
+  status.textContent = `已推送 ${cached.count || 0} 张卡片 · 截断 ${cached.truncated || 0} 张 · ${formatTime(cached.updatedAt)}`;
   status.classList.remove('off');
 }
 
@@ -74,7 +74,7 @@ async function loadState() {
   if (!state) return;
   const widgets = Array.isArray(state.widgets) ? state.widgets : [];
   status.textContent = widgets.length > 0
-    ? `桌面已有 ${widgets.length} 个实例 · 定时任务 ${state.task.length} 个`
+    ? `桌面已有 ${widgets.length} 个实例 · 定时任务 ${state.task.length} 个（实例各自缓存，updatedAt 不同）`
     : '还没有放置小组件：长按桌面添加后，点「立即刷新」可见内容';
   if (widgets.length === 0) status.classList.add('off');
   renderCards(state.cached);
@@ -86,14 +86,24 @@ document.getElementById('clear').addEventListener('click', () => call('clear', {
 document.getElementById('schedule').addEventListener('click', () =>
   call('schedule', { name: 'widget-refresh', every: 900 }).then(loadState));
 document.getElementById('reload').addEventListener('click', loadState);
+document.getElementById('update-one').addEventListener('click', async () => {
+  const input = window.prompt('更新哪个实例 id？（widget.list() 可查）', '1');
+  const id = Number(input);
+  if (!input || !Number.isInteger(id) || id <= 0) return;
+  const res = await call('update-one', { id });
+  if (res && res.ok) await loadState();
+});
 
 window.berba.on('widget', (event) => {
   show({ 小组件刷新: event });
+  if (event.rendered) {
+    status.textContent = `已推送到 ${(event.ids || []).length} 个实例 · 截断 ${event.truncated || 0} 张`;
+  }
 });
 
 window.berba.on('widget-click', (event) => {
   show({ 点击: event });
-  status.textContent = `点击了实例 ${event.id}（冷启动 ${event.coldStart}）`;
+  status.textContent = `实例 ${event.id} 第 ${event.index} 行（冷启动 ${event.coldStart}）`;
   renderCards(event.cards);
 });
 

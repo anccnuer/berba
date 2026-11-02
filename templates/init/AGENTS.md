@@ -400,26 +400,28 @@ end)
 
 ### 6.16 widget（需 `capabilities: ["widget"]`）
 
-桌面卡片式小组件：构建期生成 `WidgetProvider`、`res/layout/berba_widget.xml`、`res/xml/berba_widget_info.xml` 与 `berba_widget*` drawable/预览图，缓存写入 `SharedPreferences("berba_widget")`。
+桌面卡片式小组件：构建期生成 `WidgetProvider`、`res/layout/berba_widget.xml`、`res/xml/berba_widget_info.xml` 与 `berba_widget*` drawable/预览图，缓存写入 `SharedPreferences("berba_widget")`。每个实例有独立缓存（键 `state:<appWidgetId>`），不传 `id` 时写默认键 `state`，没有自己缓存的实例回退读它。
 
 | API | 说明 |
 | --- | --- |
-| `widget.update(opts)` | 写入缓存并渲染；返回 `{ updatedAt, ids }`，失败返回 `nil, err` |
-| `widget.clear()` | 清空缓存，小组件显示占位 |
-| `widget.list()` | 已放置实例 `{ id, updatedAt }` 数组；无实例为空表 |
+| `widget.update(opts[, id])` | 写入缓存并渲染；`id` 可选，只更新该实例；返回 `{ updatedAt, ids, truncated, rendered }`，失败返回 `nil, err` |
+| `widget.clear()` | 清空默认缓存与所有实例缓存，小组件显示占位 |
+| `widget.list()` | 已放置实例 `{ id, updatedAt }` 数组（各自缓存时间）；无实例为空表 |
 
-`opts`：`title`（≤ 24 字符）；`cards`（数组，最多 20 张，渲染固定 5 行，多余的截断并记日志）；每张卡片 `title`（≤ 24）、`value`（≤ 16）、`subtitle`（≤ 32）、`color`（`#RRGGBB`/`#AARRGGBB`，非法时忽略）。缓存序列化上限 32KB。
+`opts`：`title`（≤ 24 个字符，按 Unicode 码点计数，emoji 算 1 个）；`cards`（数组，最多 20 张，渲染固定 5 行，多余的截断并记日志）；每张卡片 `title`（≤ 24）、`value`（≤ 16）、`subtitle`（≤ 32）、`color`（`#RRGGBB`/`#AARRGGBB`，只取 RGB，alpha 按不透明处理，格式非法时忽略）。每份缓存序列化上限 32KB。
 
-- `widget.update` 在没有小组件实例时只写缓存并返回 `ids = {}`，不报错。
+返回字段：`updatedAt`（本次写入时间戳）、`ids`（收到这次更新的实例，指定 `id` 但该实例不存在时为空）、`truncated`（超出 5 行被截断的卡片数）、`rendered`（是否真的推到了桌面）。
+
+- `widget.update` 在没有小组件实例时只写缓存并返回 `ids = {}`、`rendered = false`，不报错。
 - 刷新：`updatePeriodMillis = 0`，系统不会周期唤醒；定时刷新用 `task`（`every` ≥ 900 秒）在 `app.on("task")` 里调用 `widget.update`。
-- 进程被回收、launcher 重启后 `onUpdate` 只读缓存渲染，不启动 Lua。
+- 进程被回收、launcher 重启后 `onUpdate` 只读缓存渲染，不启动 Lua；删除最后一个实例时 `onDisabled` 清空缓存。
 - v1 限制：RemoteViews 只支持框架控件 + 固定槽位，不做图片/图表、可滚动列表、`android:configure` 配置页与响应式尺寸档位。
-- 点击触发 `app.on("widget")`，`event = { id, coldStart }`；`berba-widget://` 之外的 intent 被忽略。
+- 点击触发 `app.on("widget")`，`event = { id, index, coldStart }`；`index` 为被点击的行（0 起，整块点击为 -1）。`berba-widget://` 之外的 intent 被忽略。
 
 ```lua
 app.on("create", function() widget.update({ title = "今日概览", cards = {} }) end)
 app.on("task", function(ctx) widget.update({ title = "今日概览", cards = collect() }); ctx.done() end)
-app.on("widget", function(event) log("widget", event.id, tostring(event.coldStart)) end)
+app.on("widget", function(event) log("widget", event.id, event.index, tostring(event.coldStart)) end)
 ```
 
 ## 7. 关键约定与陷阱

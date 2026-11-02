@@ -25,9 +25,21 @@ local function pushCards()
     return
   end
   log("widget.update ok updatedAt=" .. tostring(res.updatedAt)
-    .. " ids=" .. tostring(res.ids and #res.ids or 0))
-  store.set(STORE_KEY, { updatedAt = res.updatedAt, count = #cards, sample = cards })
-  bridge.emit("widget", { updatedAt = res.updatedAt, ids = res.ids })
+    .. " ids=" .. tostring(res.ids and #res.ids or 0)
+    .. " truncated=" .. tostring(res.truncated or 0)
+    .. " rendered=" .. tostring(res.rendered))
+  store.set(STORE_KEY, {
+    updatedAt = res.updatedAt,
+    count = #cards,
+    truncated = res.truncated or 0,
+    sample = cards
+  })
+  bridge.emit("widget", {
+    updatedAt = res.updatedAt,
+    ids = res.ids,
+    truncated = res.truncated or 0,
+    rendered = res.rendered
+  })
 end
 
 local function scheduleTask()
@@ -53,12 +65,28 @@ app.on("task", function(ctx)
 end)
 
 app.on("widget", function(event)
-  log("widget clicked id=" .. tostring(event.id) .. " coldStart=" .. tostring(event.coldStart))
+  log("widget clicked id=" .. tostring(event.id) .. " index=" .. tostring(event.index)
+    .. " coldStart=" .. tostring(event.coldStart))
   bridge.emit("widget-click", {
     id = event.id,
+    index = event.index,
     coldStart = event.coldStart,
     cards = store.get(STORE_KEY)
   })
+end)
+
+-- 演示 widget.update(opts, id)：只更新某个实例，其他实例不受影响。
+bridge.register("update-one", function(req)
+  req = req or {}
+  local id = req.id
+  if type(id) ~= "number" or id <= 0 then
+    return { ok = false, error = "需要正整数 id（widget.list() 可查）" }
+  end
+  local res, err = widget.update({ title = "实例 " .. tostring(id), cards = sampleCards() }, id)
+  if res == nil then
+    return { ok = false, error = err }
+  end
+  return { ok = true, id = id, truncated = res.truncated or 0, rendered = res.rendered }
 end)
 
 bridge.register("refresh", function()

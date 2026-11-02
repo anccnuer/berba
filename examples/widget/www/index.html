@@ -21,12 +21,13 @@
         <div class="widget-title" id="previewTitle">今日概览</div>
         <div class="widget-updated" id="previewUpdated"></div>
         <ul class="widget-cards" id="previewCards"></ul>
-        <p class="widget-hint">布局固定 5 行：多余卡片会被截断并记日志。</p>
+        <p class="widget-hint">布局固定 5 行：多余卡片会被截断，<code>truncated</code> 会回报截掉的张数。点桌面小组件的某一行，<code>index</code> 会带回点的是第几行。</p>
       </div>
     </section>
 
     <section class="actions">
       <button id="refresh">立即刷新</button>
+      <button id="update-one" class="secondary">更新单个实例</button>
       <button id="clear" class="secondary">widget.clear()</button>
       <button id="schedule" class="secondary">每 15 分钟刷新</button>
       <button id="reload" class="secondary">重新读取</button>

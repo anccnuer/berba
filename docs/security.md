@@ -103,8 +103,8 @@ base, table, string, math, coroutine, bit32
 ## 桌面小组件
 
 - `widget` 能力注册 `WidgetProvider`（`exported="false"` + `APPWIDGET_UPDATE` intent-filter，`android.appwidget.provider` 元数据指向 `@xml/berba_widget_info`）。卡片是 RemoteViews 快照，由 launcher 进程渲染：不含 WebView，不执行 Lua/JS，也不接受外部构造的布局。
-- 缓存写入应用私有 `SharedPreferences("berba_widget")`（序列化 ≤ 32KB），不是加密存储；卡片文本会直接显示在桌面，**不要放入密钥或敏感个人信息**。
-- 点击 PendingIntent 使用显式组件（`MainActivity`）与 `berba-widget://open/<appWidgetId>` data，带 `FLAG_IMMUTABLE | FLAG_UPDATE_CURRENT`；不匹配该 scheme 的 Intent 只记日志并丢弃，消费后清空 extras，防止旋转等重复触发。
+- 缓存写入应用私有 `SharedPreferences("berba_widget")`，默认键 `state`、实例键 `state:<appWidgetId>`，每份序列化 ≤ 32KB，不是加密存储；卡片文本会直接显示在桌面，**不要放入密钥或敏感个人信息**。
+- 点击 PendingIntent 使用显式组件（`MainActivity`）与 `berba-widget://open/<appWidgetId>[/<index>]` data，带 `FLAG_IMMUTABLE | FLAG_UPDATE_CURRENT`；不匹配该 scheme 的 Intent 只记日志并丢弃，消费后清空 extras，防止旋转等重复触发。行号必须落在 `0..4`，越界同样被丢弃。
 - 进程被回收后 `onUpdate` 只读缓存渲染，不启动 Lua；刷新只能由本应用经前台界面或 `task` 能力主动推送，第三方无法借小组件触发本应用代码。
 
 ## 签名与分发
